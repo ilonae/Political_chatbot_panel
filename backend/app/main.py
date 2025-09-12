@@ -39,13 +39,20 @@ import base64
 
 load_dotenv()
 
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
-CORS(app)
 
-# In-memory storage for bot sessions (in production, use Redis or database)
+
+CORS(app, 
+     supports_credentials=True,
+     origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Add your frontend URL
+     allow_headers=["Content-Type", "Authorization"],
+     methods=["GET", "POST", "OPTIONS"])
+
 bot_sessions = {}
+
 
 class DiscussionBot:
     def __init__(self, name, system_prompt, max_token_limit=2000):
@@ -206,6 +213,7 @@ def get_bot_session(session_id):
     
     return bot_sessions[session_id]
 
+
 def self_clean_message(message):
     """Clean up messages to remove any self-referential content"""
     # Remove common introduction phrases
@@ -247,26 +255,39 @@ def self_clean_message(message):
     
     return message
 
+@app.before_request
+def make_session_permanent():
+    session.permanent = True
+
 @app.route('/')
 def index():
     # Generate a unique session ID if not exists
     if 'session_id' not in session:
         session['session_id'] = str(uuid.uuid4())
+        print(f"New session created: {session['session_id']}")
     
     return render_template('index.html')
 
 @app.route('/api/start_conversation', methods=['GET'])
 def start_conversation():
-    """Generate an opening message to start the conversation"""
+    if request.method == 'OPTIONS':
+        return '', 200
+   
     session_id = session.get('session_id')
-    if not session_id:
-        return jsonify({'error': 'Session not found'}), 400
-        
-    bot_session = get_bot_session(session_id)
-    bots = bot_session['bots']
+    print(f"Session ID: {session_id}")
+    print(f"Session data: {dict(session)}")
     
-    # Generate opening message from the Debate Partner
-    opening_message = bots['partner'].respond(
+    if not session_id:
+        # Create a new session if it doesn't exist
+        session_id = str(uuid.uuid4())
+        session['session_id'] = session_id
+        print(f"Created new session: {session_id}")
+    try:
+        bot_session = get_bot_session(session_id)
+        bots = bot_session['bots']
+    
+        # Generate opening message from the Debate Partner
+        opening_message = bots['partner'].respond(
         "SYSTEM: Begin the debate immediately with a highly controversial, provocative statement "
         "about one of these sensitive topics: immigration, national identity, EU sovereignty, "
         "multiculturalism, or traditional values. Use strong, emotional language that will "
@@ -277,18 +298,21 @@ def start_conversation():
         "Start with your most controversial position stated as absolute truth."
     )
     
-    # Clean up the response to remove any remaining introductions
-    opening_message = self_clean_message(opening_message)
-    
-    # Update message count
-    bot_session['message_count'] = 1
-    bot_session['topic'] = "Immigration and National Identity"  # Default starting topic
-    
-    return jsonify({
-        'opening_message': opening_message,
-        'message_count': bot_session['message_count'],
-        'topic': bot_session['topic']
-    })
+        # Clean up the response to remove any remaining introductions
+        opening_message = self_clean_message(opening_message)
+        
+        # Update message count
+        bot_session['message_count'] = 1
+        bot_session['topic'] = "Immigration and National Identity"  # Default starting topic
+        
+        return jsonify({
+            'opening_message': opening_message,
+            'message_count': bot_session['message_count'],
+            'topic': bot_session['topic']
+        })
+    except Exception as e:
+        print(f"Error in start_conversation: {str(e)}")
+        return jsonify({'error': f'Failed to start conversation: {str(e)}'}), 500
 
 @app.route('/api/send_message', methods=['POST'])
 def send_message():
@@ -407,6 +431,7 @@ def generate_speech():
     except Exception as e:
         print(f"Error generating speech: {e}")
         return jsonify({'error': 'Failed to generate speech'}), 500
+
 
 @app.route('/api/reset', methods=['POST'])
 def reset_conversation():
