@@ -15,7 +15,7 @@ export const startConversation = async () => {
   return response.data;
 };
 
-export const sendMessage = async (message: string) => {
+export const sendMessage = async (message: string): Promise<ApiResponse> => {
   const response = await api.post('/api/send_message', { message });
   return response.data;
 };
