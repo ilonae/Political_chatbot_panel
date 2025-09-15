@@ -10,19 +10,59 @@ const api = axios.create({
   },
 });
 
-export const startConversation = async () => {
-  const response = await api.get('/api/start_conversation');
-  return response.data;
+export const sendMessage = async (message: string, language: 'en' | 'de' = 'en') => {
+  const response = await fetch(`${API_BASE_URL}/chat/message`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ 
+      message, 
+      language,
+      session_id: 'default'  
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to send message');
+  }
+
+  return response.json();
 };
 
-export const sendMessage = async (message: string): Promise<ApiResponse> => {
-  const response = await api.post('/api/send_message', { message });
-  return response.data;
+export const startConversation = async (language: 'en' | 'de' = 'en') => {
+  const response = await fetch(`${API_BASE_URL}/chat/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ 
+      language,
+      session_id: 'default'  
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to start conversation');
+  }
+
+  return response.json();
 };
 
 export const resetConversation = async () => {
-  const response = await api.post('/api/reset');
-  return response.data;
+  const response = await fetch(`${API_BASE_URL}/api/chat/reset`, { 
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ session_id: 'default' }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to reset conversation');
+  }
+
+  return response.json();
 };
 
 export const generateSpeech = async (text: string, sender: string) => {
