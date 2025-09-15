@@ -5,6 +5,19 @@ from app.core.config import settings
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY))
 
+
+def get_translated_topic(topic: str, language: str) -> str:
+    topic_translations = {
+        "Political ideologies and perspectives": {
+            "en": "Political ideologies and perspectives",
+            "de": "Politische Ideologien und Perspektiven"
+        },
+        "Current Debate Topic": {
+            "en": "Current Debate Topic",
+            "de": "Aktuelles Debatten-Thema"
+        }
+    }
+    return topic_translations.get(topic, {}).get(language, topic)
 class ChatService:
     _sessions: Dict[str, List[Dict]] = {}
     _session_languages: Dict[str, Literal['en', 'de']] = {} 
@@ -20,7 +33,7 @@ class ChatService:
         cls._add_to_history(session_id, "user", message)
         response = await cls._get_ai_response(session_id, language)
         cls._add_to_history(session_id, "assistant", response)
-        
+        topic = get_translated_topic("Current Debate Topic", language)
         return {
             "responses": [{
                 "sender": "Debate Partner",
@@ -29,7 +42,7 @@ class ChatService:
             }],
             "session_id": session_id,
             "message_count": len([m for m in cls._sessions[session_id] if m["role"] == "user"]),
-            "topic": "Current Debate Topic",  # Add this field
+            "topic": topic,
             "language": language
         }
 
@@ -38,13 +51,13 @@ class ChatService:
         await cls._initialize_session(session_id, language)
         opening_message = await cls._get_ai_response(session_id, language)
         cls._add_to_history(session_id, "assistant", opening_message)
-        
+        topic = get_translated_topic("Political ideologies and perspectives", language)
         # Return format that frontend expects
         return {
             "opening_message": opening_message,
             "session_id": session_id,
             "message_count": 1,
-            "topic": "Political ideologies and perspectives",  # Add topic
+            "topic": topic,
             "language": language
         }
     

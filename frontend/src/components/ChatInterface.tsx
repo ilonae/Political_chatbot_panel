@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '../lib/utils';
+import { getTranslatedText } from '../lib/language';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent } from './ui/card';
@@ -269,16 +270,14 @@ const ChatInterface: React.FC = () => {
               </Sheet>
 
               <h1 className="text-xl font-semibold text-foreground">
-                {state.currentLanguage === 'en' 
-                  ? 'Confronting Fascism: An AI Dialogue' 
-                  : 'Faschismus Konfrontieren: Ein KI-Dialog'}
+              {getTranslatedText('Confronting Fascism: An AI Dialogue', state.currentLanguage)}
               </h1>
             </div>
 
             <div className="flex items-center gap-2">
               <div className="hidden md:flex">
                 <span className="text-sm text-muted-foreground bg-muted px-2 py-1 rounded-md">
-                  {state.currentTopic}
+                {getTranslatedText(state.currentTopic, state.currentLanguage)}
                 </span>
               </div>
 
@@ -359,6 +358,7 @@ const ChatInterface: React.FC = () => {
                       message={message} 
                       isMobile={isMobile}
                       isTablet={isTablet}
+                      currentLanguage={state.currentLanguage}
                     />
                   </motion.div>
                 ))}
@@ -368,6 +368,7 @@ const ChatInterface: React.FC = () => {
                 <ThinkingIndicator 
                   isMobile={isMobile} 
                   isTablet={isTablet}
+                  language={state.currentLanguage}
                 />
               )}
               <div ref={messagesEndRef} />

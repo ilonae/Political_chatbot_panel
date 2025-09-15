@@ -20,3 +20,4 @@ export interface Message {
     message_count: number;
     topic: string;
   }
+  export type SenderType = 'user' | 'partner' | 'moderator' | 'system';

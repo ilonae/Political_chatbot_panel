@@ -6,9 +6,10 @@ import { cn } from '../lib/utils';
 interface ThinkingIndicatorProps {
   isMobile?: boolean;
   isTablet?: boolean;
+  language?: 'en' | 'de';
 }
 
-const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = ({ isMobile = false, isTablet = false }) => {
+const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = ({ isMobile = false, isTablet = false, language = 'en' }) => {
   return (
     <motion.div
       className="flex items-center gap-3 px-5 py-3 bg-gradient-to-r from-purple-50 to-blue-50 rounded-2xl mx-4 my-3 shadow-md"
@@ -24,7 +25,7 @@ const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = ({ isMobile = false,
       </motion.div>
       
       <span className={cn("font-semibold text-blue-700", isTablet ? "text-xl" : "text-lg")}>
-        Thinking
+      {language === 'en' ? 'Thinking' : 'Denkt'}
       </span>
       
       {[0, 1, 2].map((i) => (
