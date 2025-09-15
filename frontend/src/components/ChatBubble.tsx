@@ -2,18 +2,20 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { User, MessageSquare, Brain, Settings } from 'lucide-react';
 import { Message } from '../types/Chat';
+import { getTranslatedSender } from '../lib/language';
 
 interface ChatBubbleProps {
   message: Message;
   isMobile?: boolean;
   isTablet?: boolean;
+  currentLanguage?: 'en' | 'de';
 }
 
 const cn = (...classes: (string | boolean | undefined)[]) => {
   return classes.filter(Boolean).join(' ');
 };
 
-const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isMobile = false, isTablet = false }) => {
+const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isMobile = false, isTablet = false, currentLanguage = 'en'  }) => {
   const isUser = message.type === 'user';
   const isSystem = message.type === 'system';
 
@@ -30,6 +32,8 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isMobile = false, isTa
         return <Settings className={cn("h-5 w-5", isTablet && "h-6 w-6")} />;
     }
   };
+
+  const translatedSender = getTranslatedSender(message.sender, currentLanguage);
 
   const getBubbleStyle = () => {
     switch (message.type) {
@@ -96,7 +100,7 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({ message, isMobile = false, isTa
             isUser ? 'text-right' : 'text-left',
             isMobile ? 'text-sm' : isTablet ? 'text-lg' : 'text-base'
           )}>
-            {message.sender}
+            {translatedSender}
           </span>
           
           {/* Shiny Chat Bubble */}
