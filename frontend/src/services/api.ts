@@ -1,14 +1,13 @@
-import axios from 'axios';
 import { ApiResponse, StartConversationResponse, RecommendedAnswer } from '../types/Chat';
 
-export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 export const generateRecommendedAnswers = async (
   userInput: string, 
   conversationHistory: string, 
   language: 'en' | 'de' = 'en'
 ): Promise<{ recommended_answers: RecommendedAnswer[] }> => {
-  const response = await fetch(`${API_BASE_URL}/chat/generate_recommendations`, {
+  const response = await fetch(`${API_BASE_URL}/api/chat/generate_recommendations`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -22,15 +21,17 @@ export const generateRecommendedAnswers = async (
   });
 
   if (!response.ok) {
-    throw new Error('Failed to generate recommendations');
+    const errorText = await response.text();
+    console.error('Server error response:', errorText);
+    throw new Error(`Failed to generate recommended answers: ${response.status} ${response.statusText}`);
   }
 
-  return response.json();
-};
+  const data = await response.json();
+  return data;
+}
 
-export const sendMessage = async (message: string, language: 'en' | 'de' = 'en'): 
-Promise<any> => {
-  const response = await fetch(`${API_BASE_URL}/chat/message`, {
+export const sendMessage = async (message: string, language: 'en' | 'de' = 'en'): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/api/chat/message`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -41,6 +42,8 @@ Promise<any> => {
       session_id: 'default'  
     }),
   });
+
+  console.log('Response status:', response.status);
 
   if (!response.ok) {
     throw new Error('Failed to send message');
@@ -58,12 +61,10 @@ Promise<any> => {
     topic: responseData.topic,
     recommended_answers: responseData.recommended_answers || []
   };
-
 };
 
-export const startConversation = async (language: 'en' | 'de' = 'en'):
-Promise<StartConversationResponse>  => {
-  const response = await fetch(`${API_BASE_URL}/chat/start`, {
+export const startConversation = async (language: 'en' | 'de' = 'en'): Promise<StartConversationResponse>  => {
+  const response = await fetch(`${API_BASE_URL}/api/chat/start`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -87,9 +88,34 @@ export const resetConversation = async (): Promise<void> => {
     headers: {
       'Content-Type': 'application/json',
     },
-    });
-
+  });
+  
   if (!response.ok) {
     throw new Error('Failed to reset conversation');
+  }
+};
+
+export const generateSpeech = async (text: string, sender: string, language: 'en' | 'de' = 'en') => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/chat/generate_speech`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        text, 
+        language,
+        sender
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to generate speech');
+    }
+    const audioData = await response.arrayBuffer();
+    return { audioData };
+  } catch (error) {
+    console.error('Speech generation error:', error);
+    throw error;
   }
 };
