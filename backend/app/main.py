@@ -1,4 +1,7 @@
-from fastapi import FastAPI, HTTPException
+from openai import OpenAI
+import os, io
+from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
@@ -27,6 +30,7 @@ app.add_middleware(
 )
 app.include_router(chat_router, prefix="/api")
 
+  
 @app.post("/api/send_message")
 async def send_message_direct(request: ChatRequest):
     from app.services.chat_service import ChatService
