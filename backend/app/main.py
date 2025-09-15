@@ -1,16 +1,15 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.config import settings
-from app.api.endpoints import router as api_router
+from app.api.endpoints import router as chat_router
+from app.models.chat import ChatRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic here
     print("Starting up...")
     yield
-    # Shutdown logic here
     print("Shutting down...")
 
 app = FastAPI(
@@ -28,8 +27,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API routes
-app.include_router(api_router, prefix="/api")
+# Include the chat router (creates /api/chat/* endpoints)
+app.include_router(chat_router, prefix="/api")
+
+# Also add direct endpoints for frontend compatibility
+@app.post("/api/send_message")
+async def send_message_direct(request: ChatRequest):
+    from app.services.chat_service import ChatService
+    try:
+        response = await ChatService.process_message(request.message, request.session_id)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/start_conversation")
+async def start_conversation_direct(session_id: str = "default"):
+    from app.services.chat_service import ChatService
+    try:
+        response = await ChatService.start_conversation(session_id)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/reset")
+async def reset_conversation_direct(session_id: str = "default"):
+    from app.services.chat_service import ChatService
+    try:
+        response = await ChatService.reset_conversation(session_id)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
 async def root():
