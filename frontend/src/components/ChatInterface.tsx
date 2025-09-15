@@ -1,13 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Volume2, 
   VolumeX, 
   RefreshCw, 
   Send, 
-  User, 
-  MessageSquare, 
-  Brain, 
   Settings,
   Menu,
   Info,
@@ -21,9 +18,8 @@ import { cn } from '../lib/utils';
 import { getTranslatedText } from '../lib/language';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Card, CardContent } from './ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
-import { Toast, ToastProvider } from './ui/toast';
+import { ToastProvider } from './ui/toast';
 import { 
   Sheet,
   SheetContent,
@@ -38,7 +34,10 @@ import ThinkingIndicator from './ThinkingIndicator';
 import LanguageToggle from './LanguageToggle';
 import RecommendedAnswers from './RecommendedAnswers';
 import { Message, ChatState } from '../types/Chat';
-import { API_BASE_URL, sendMessage, startConversation, resetConversation } from '../services/api';
+import { sendMessage, startConversation, resetConversation } from '../services/api';
+import VoiceSettingsPanel from './VoiceSettingsPanel';
+import { voiceService } from '../services/voiceService';
+import FirstInteractionPrompt from './FirstInteractionPrompt';
 
 const ChatInterface: React.FC = () => {
   const [state, setState] = useState<ChatState>({
@@ -50,29 +49,221 @@ const ChatInterface: React.FC = () => {
     recommendedAnswers: [],
     isGeneratingRecommendations: false
   });
+  const [showFirstInteractionPrompt, setShowFirstInteractionPrompt] = useState(false);
+  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
   const [inputText, setInputText] = useState('');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const [isFirstMessagePlayed, setIsFirstMessagePlayed] = useState(false);
+  const [isWaitingForInteraction, setIsWaitingForInteraction] = useState(false);
 
-  // Detect screen size
+  // Refs
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const lastPlayedMessageId = useRef<string>('');
+
+  // Check if user has interacted and set up voice service
   useEffect(() => {
     const checkScreenSize = () => {
       const width = window.innerWidth;
       setIsMobile(width < 768);
       setIsTablet(width >= 768 && width < 1024);
     };
-  
+    
     checkScreenSize();
     window.addEventListener('resize', checkScreenSize);
-    return () => window.removeEventListener('resize', checkScreenSize);
+    
+    const storedInteraction = localStorage.getItem('userHasInteracted');
+    if (storedInteraction) {
+      setHasUserInteracted(true);
+      voiceService.setUserInteracted();
+    } else {
+      setShowFirstInteractionPrompt(true);
+    }
+    
+    return () => {
+      window.removeEventListener('resize', checkScreenSize);
+      voiceService.stop();
+    };
   }, []);
+
+  const handleDismissPrompt = () => {
+    setShowFirstInteractionPrompt(false);
+    setHasUserInteracted(true);
+    localStorage.setItem('userHasInteracted', 'true');
+    voiceService.setUserInteracted();
+  };
+
+  // Function to play message with retry mechanism
+  const playMessageWithRetry = async (message: Message, retries = 2) => {
+    console.log('Attempting to play message:', message.id, message.type);
+    if (message.type !== 'partner' || 
+        message.message.includes('Language switched') ||
+        message.message.includes('Sprache auf Deutsch')) {
+          console.log('Skipping message - not a partner message or system message');
+
+      return false;
+    }
+
+    if (!voiceEnabled) {
+      console.log('Skipping message - voice disabled');
+      return false;
+    } 
+    if (!hasUserInteracted) {
+      console.log('Skipping message - user not interacted yet');
+      return false;
+    } 
+
+    voiceService.stop();
+    console.log('Stopped any previous audio');
+
+    for (let i = 0; i < retries; i++) {
+      try {
+        console.log(`Play attempt ${i + 1} for message:`, message.id);
+        await voiceService.speakText(message.message, message.sender, message.language);
+        console.log('Successfully played message:', message.id);
+        return true;
+      } catch (error) {
+        console.error(`Voice playback attempt ${i + 1} failed:`, error);
+      }
+    }
+    console.error('All playback attempts failed for message:', message.id);
+    return false;
+  };
+
+  // Handle voice playback for new messages
+  useEffect(() => {
+    const playMessageAudio = async () => {
+      if (voiceEnabled && hasUserInteracted && state.messages.length > 0) {
+        const lastMessage = state.messages[state.messages.length - 1];
+        
+        // Don't play voice for user messages or system messages about language
+        if (lastMessage.type !== 'user' && 
+            !lastMessage.message.includes('Language switched') &&
+            !lastMessage.message.includes('Sprache auf Deutsch')) {
+
+            try {
+              await playMessageWithRetry(lastMessage);
+          } catch (error) {
+            console.error('Failed to play message audio:', error);
+          }
+        }
+      }
+    };
+
+    if (state.messages.length > 0 && hasUserInteracted) {
+      const lastMessage = state.messages[state.messages.length - 1];
+      
+      if (lastMessage.id !== lastPlayedMessageId.current && 
+        lastMessage.type !== 'user' ) {
+      lastPlayedMessageId.current = lastMessage.id;
+      playMessageAudio();
+    }
+    }
+  }, [state.messages, voiceEnabled, hasUserInteracted, state.currentLanguage]);
+
+  const handleEnableVoice = useCallback(() => {
+    console.log('User interaction detected - enabling voice');
+    setHasUserInteracted(true);
+    voiceService.setUserInteracted();
+    localStorage.setItem('userHasInteracted', 'true');
+    setIsWaitingForInteraction(false);
+
+    const unplayedMessages = state.messages.filter(msg => 
+      msg.type === 'partner' && 
+      !msg.message.includes('Language switched') &&
+      !msg.message.includes('Sprache auf Deutsch')
+      );
+      if (unplayedMessages.length > 0) {
+      unplayedMessages.forEach((message, index) => {
+        setTimeout(() => {
+          voiceService.speakText(
+            message.message, 
+            message.sender, 
+            message.language as 'en' | 'de'
+          ).catch(error => {
+            console.error('Failed to play message:', error);
+          });
+        }, index * 2000); // 2-second delay between messages
+      });
+    }
+  }, [hasUserInteracted, state.messages, isFirstMessagePlayed]);
+
+  // Set up user interaction detection for voice service
+  useEffect(() => {
+    const handleUserInteraction = () => {
+    voiceService.setUserInteracted();
+    setHasUserInteracted(true);
+    };
+
+    // Only add listeners if user hasn't interacted yet
+    if (!hasUserInteracted) {
+      const events = ['click', 'keydown', 'touchstart', 'mousedown'];
+      
+      events.forEach(event => {
+        document.addEventListener(event, handleUserInteraction, { once: true });
+      });
+
+      return () => {
+        events.forEach(event => {
+          document.removeEventListener(event, handleUserInteraction);
+        });
+      };
+    }
+  }, [hasUserInteracted]);
+
+  // Function to play message with retry mechanism
+  // Removed duplicate declaration of playMessageWithRetry
+
+  // Handle voice playback for new messages
+  useEffect(() => {
+    const playMessageAudio = async () => {
+      if (voiceEnabled && state.messages.length > 0) {
+        const lastMessage = state.messages[state.messages.length - 1];
+  
+        // Don't play voice for user messages or system messages about language
+        if (
+          lastMessage.type !== 'user' &&
+          !lastMessage.message.includes('Language switched') &&
+          !lastMessage.message.includes('Sprache auf Deutsch') &&
+          hasUserInteracted
+        ) {
+          const success = await playMessageWithRetry(lastMessage);
+          if (!success) {
+            console.error('Failed to play message audio after retries.');
+          }
+        }
+      }
+    };
+  
+    playMessageAudio();
+  }, [state.messages, voiceEnabled]);
+
+  // Set up user interaction detection for voice service
+  useEffect(() => {
+    const handleUserInteraction = () => {
+      if (!hasUserInteracted) {
+        console.log('User interaction detected - enabling voice.');
+        setHasUserInteracted(true);
+        voiceService.setUserInteracted();
+        localStorage.setItem('userHasInteracted', 'true');
+      }
+    };
+  
+    if (!hasUserInteracted) {
+      const events = ['click', 'keydown', 'touchstart', 'mousedown'];
+      events.forEach(event => document.addEventListener(event, handleUserInteraction, { once: true }));
+  
+      return () => {
+        events.forEach(event => document.removeEventListener(event, handleUserInteraction));
+      };
+    }
+  }, [hasUserInteracted]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ 
-      behavior: 'smooth',
-      block: 'nearest'
+      behavior: 'smooth'
     });
   };
 
@@ -83,6 +274,7 @@ const ChatInterface: React.FC = () => {
   const initializeConversation = async () => {
     setState(prev => ({ ...prev, isThinking: true, isGeneratingRecommendations: true }));
     try {
+      console.log('Starting conversation in language:', state.currentLanguage);
       const response = await startConversation(state.currentLanguage);
       const newMessage: Message = {
         id: Date.now().toString(),
@@ -92,6 +284,7 @@ const ChatInterface: React.FC = () => {
         timestamp: new Date(),
         language: state.currentLanguage
       };
+      
       setState(prev => ({
         ...prev,
         messages: [newMessage],
@@ -101,23 +294,31 @@ const ChatInterface: React.FC = () => {
         recommendedAnswers: response.recommended_answers || [],
         isGeneratingRecommendations: false
       }));
+
+      if (!hasUserInteracted) {
+        setIsWaitingForInteraction(true);
+      }
+      
     } catch (error) {
       console.error('Failed to start conversation:', error);
-      const errorMessage: Message = {
+      const fallbackMessages = {
+        en: "Welcome! I'm ready to discuss political topics. What would you like to talk about?",
+        de: "Willkommen! Ich bin bereit, über politische Themen zu diskutieren. Worüber möchten Sie sprechen?"
+      };
+      const newMessage: Message = {
         id: Date.now().toString(),
-        sender: 'System',
-        message: state.currentLanguage === 'en' 
-          ? 'Failed to start conversation' 
-          : 'Konversation konnte nicht gestartet werden',
-        type: 'system',
+        sender: 'Debate Partner',
+        message: fallbackMessages[state.currentLanguage],
+        type: 'partner',
         timestamp: new Date(),
         language: state.currentLanguage
       };
       setState(prev => ({
         ...prev,
-        messages: [errorMessage],
-        isThinking: false,
-        isGeneratingRecommendations: false
+        messages: [newMessage],
+        messageCount: 1,
+        currentTopic: state.currentLanguage === 'en' ? 'Political Discussion' : 'Politische Diskussion',
+        isThinking: false
       }));
     }
   };
@@ -126,53 +327,17 @@ const ChatInterface: React.FC = () => {
     initializeConversation();
   }, []);
 
-  const handleLanguageChange = async (language: 'en' | 'de') => {
-    // Show loading state briefly
-    setState(prev => ({ 
-      ...prev, 
-      isThinking: true,
-      isGeneratingRecommendations: false
-    }));
-  
-    // Add language change message
-    const languageMessage: Message = {
-      id: Date.now().toString(),
-      sender: 'System',
-      message: language === 'en' 
-        ? 'Language switched to English. Send a message to continue in English...' 
-        : 'Sprache auf Deutsch gewechselt. Senden Sie eine Nachricht, um auf Deutsch fortzufahren...',
-      type: 'system',
-      timestamp: new Date(),
-      language
+  const handleLanguageChange = (newLanguage: "en" | "de") => {
+      setState((prev) => ({
+        ...prev,
+        currentLanguage: newLanguage,
+      }));
+      console.log(`Language changed to: ${newLanguage}`);
     };
-  
-    // Update frontend state - the backend will update on next message send
-    setState(prev => ({
-      ...prev,
-      currentLanguage: language,
-      recommendedAnswers: [], // Clear old recommendations
-      messages: [...prev.messages, languageMessage],
-      isThinking: false
-    }));
-  
-    // Generate fallback recommendations in the new language
-    const fallbackRecommendations = [
-      { id: 'rec_1', text: language === 'en' ? 'Continue in English' : 'Auf Deutsch fortsetzen' },
-      { id: 'rec_2', text: language === 'en' ? 'What are your thoughts?' : 'Was sind Ihre Gedanken?' },
-      { id: 'rec_3', text: language === 'en' ? 'Tell me more' : 'Erzählen Sie mehr' }
-    ];
-  
-    setState(prev => ({
-      ...prev,
-      recommendedAnswers: fallbackRecommendations
-    }));
-  };
 
   const handleSendMessage = async (messageText?: string) => {
     const textToSend = messageText || inputText.trim();
     console.log('Sending message:', textToSend);
-    console.log('Message text param:', messageText);
-    console.log('Input text:', inputText);
     
     if (!textToSend || state.isThinking) return;
 
@@ -189,60 +354,46 @@ const ChatInterface: React.FC = () => {
       ...prev,
       messages: [...prev.messages, userMessage],
       isThinking: true,
-      isGeneratingRecommendations: false,
       recommendedAnswers: []
     }));
-    
-    if (!messageText) {
-      setInputText('');
-    }
+
+    setInputText('');
 
     try {
-      // FIXED: Use textToSend instead of inputText.trim()
       const response = await sendMessage(textToSend, state.currentLanguage);
       console.log('API response:', response);
       
       const botMessage: Message = {
         id: Date.now().toString() + Math.random(),
         sender: 'Debate Partner',
-        message: response.responses[0].message,
+        message: response.message,
         type: 'partner',
         timestamp: new Date(),
         language: state.currentLanguage
       };  
+      
       setState(prev => ({
         ...prev,
         messages: [...prev.messages, botMessage],
         messageCount: response.message_count,
         currentTopic: response.topic,
         isThinking: false,
-        recommendedAnswers: response.recommended_answers || [],
-        isGeneratingRecommendations: false
+        recommendedAnswers: response.recommended_answers || []
       }));
+
+      // Play the bot message immediately after it's added to state
+      if (voiceEnabled && hasUserInteracted) {
+        setTimeout(() => {
+          playMessageWithRetry(botMessage).catch(console.error);
+        }, 100);
+      }
 
     } catch (error) {
       console.error('Failed to send message:', error);
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        sender: 'System',
-        message: state.currentLanguage === 'en'
-          ? 'Sorry, there was an error processing your message.'
-          : 'Entschuldigung, beim Verarbeiten Ihrer Nachricht ist ein Fehler aufgetreten.',
-        type: 'system',
-        timestamp: new Date(),
-        language: state.currentLanguage
-      };
-      setState(prev => ({
-        ...prev,
-        messages: [...prev.messages, errorMessage],
-        isThinking: false,
-        isGeneratingRecommendations: false
-      }));
     }
   };
 
   const handleRecommendedAnswerSelect = (answer: string) => {
-    console.log('Selected recommended answer:', answer);
     handleSendMessage(answer);
   };
 
@@ -253,29 +404,15 @@ const ChatInterface: React.FC = () => {
       initializeConversation();
     } catch (error) {
       console.error('Failed to reset conversation:', error);
-      const errorMessage: Message = {
-        id: Date.now().toString(),
-        sender: 'System',
-        message: state.currentLanguage === 'en'
-          ? 'Failed to reset conversation'
-          : 'Konversation konnte nicht zurückgesetzt werden',
-        type: 'system',
-        timestamp: new Date(),
-        language: state.currentLanguage
-      };
-      setState(prev => ({
-        ...prev,
-        messages: [...prev.messages, errorMessage],
-        isThinking: false,
-        isGeneratingRecommendations: false
-      }));
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
+  const handleVoiceToggle = () => {
+    setVoiceEnabled(!voiceEnabled);
+    if (!voiceEnabled && !hasUserInteracted) {
+      setHasUserInteracted(true);
+      voiceService.setUserInteracted();
+      localStorage.setItem('userHasInteracted', 'true');
     }
   };
 
@@ -294,9 +431,7 @@ const ChatInterface: React.FC = () => {
                 </SheetTrigger>
                 <SheetContent side="left" className="w-80">
                   <SheetHeader>
-                    <SheetTitle>
-                      {getTranslatedText('Chat Settings', state.currentLanguage)}
-                    </SheetTitle>
+                    <SheetTitle>{getTranslatedText('Chat Settings', state.currentLanguage)}</SheetTitle>
                     <SheetDescription>
                       {getTranslatedText('Configure your debate experience', state.currentLanguage)}
                     </SheetDescription>
@@ -313,15 +448,34 @@ const ChatInterface: React.FC = () => {
                         )}
                       </span>
                     </div>
+                    <div className="flex items-center gap-2">
+                      <Volume2 className="h-4 w-4" />
+                      <span className="text-sm text-muted-foreground">
+                        {state.currentLanguage === 'en' ? 'Voice' : 'Stimme'}: 
+                        <span className="font-semibold ml-1">
+                          {voiceEnabled 
+                            ? (state.currentLanguage === 'en' ? 'Enabled' : 'Aktiviert') 
+                            : (state.currentLanguage === 'en' ? 'Disabled' : 'Deaktiviert')}
+                        </span>
+                      </span>
+                    </div>
+                    {!hasUserInteracted && (
+                      <div className="flex items-center gap-2 text-amber-600">
+                        <Info className="h-4 w-4" />
+                        <span className="text-sm">
+                          {state.currentLanguage === 'en' 
+                            ? 'Click anywhere to enable voice' 
+                            : 'Klicken Sie irgendwo, um die Stimme zu aktivieren'}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </SheetContent>
               </Sheet>
-
               <h1 className="text-xl font-semibold text-foreground">
                 {getTranslatedText('Confronting Fascism: An AI Dialogue', state.currentLanguage)}
               </h1>
             </div>
-
             <div className="flex items-center gap-2">
               <div className="hidden md:flex">
                 <span className="text-sm text-muted-foreground bg-muted px-2 py-1 rounded-md">
@@ -351,7 +505,26 @@ const ChatInterface: React.FC = () => {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setVoiceEnabled(!voiceEnabled)}
+                    onClick={handleEnableVoice}
+                    className={!hasUserInteracted ? "bg-blue-100 animate-pulse" : ""}
+                  >
+                    <Volume2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {!hasUserInteracted 
+                    ? (state.currentLanguage === 'en' ? 'Click to enable voice' : 'Klicken Sie zum Aktivieren')
+                    : (state.currentLanguage === 'en' ? 'Voice enabled' : 'Stimme aktiviert')}
+                </TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={handleVoiceToggle}
+                    disabled={!hasUserInteracted}
                   >
                     {voiceEnabled ? (
                       <Volume2 className="h-4 w-4" />
@@ -430,44 +603,91 @@ const ChatInterface: React.FC = () => {
 
             {/* Input Area */}
             <div className="p-4 border-t bg-white">
-              <div className="bg-gradient-to-r from-blue-50 to-gray-50 rounded-2xl p-4 shadow-lg">
-                <form 
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }}
-                  className="flex gap-3 items-end"
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSendMessage();
+                }}
+                className="flex gap-3 items-end"
+              >
+                <Input
+                  placeholder={getTranslatedText("Type your response...", state.currentLanguage)}
+                  value={inputText}
+                  onChange={(e) => setInputText(e.target.value)}
+                  disabled={state.isThinking}
+                  className={cn(
+                    "flex-1 border-2 border-gray-300 rounded-2xl px-5 py-4 font-medium",
+                    "focus:border-blue-500 focus:ring-2 focus:ring-blue-200",
+                    isMobile ? "text-lg" : isTablet ? "text-2xl" : "text-xl"
+                  )}
+                />
+                <Button
+                  type="submit"
+                  disabled={state.isThinking || !inputText.trim()}
+                  size={isTablet ? "lg" : "default"}
+                  className={cn(
+                    "rounded-2xl font-bold shadow-lg",
+                    "bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700",
+                    "disabled:from-gray-300 disabled:to-gray-400 disabled:text-gray-500"
+                  )}
                 >
-                  <Input
-                    placeholder={getTranslatedText("Type your response...", state.currentLanguage)}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    disabled={state.isThinking}
-                    className={cn(
-                      "flex-1 border-2 border-gray-300 rounded-2xl px-5 py-4 font-medium",
-                      "focus:border-blue-500 focus:ring-2 focus:ring-blue-200",
-                      isMobile ? "text-lg" : isTablet ? "text-2xl" : "text-xl",
-                      isMobile ? "h-12" : isTablet ? "h-16" : "h-14"
-                    )}
-                  />
-                  <Button
-                    type="submit"
-                    disabled={state.isThinking || !inputText.trim()}
-                    size={isTablet ? "lg" : "default"}
-                    className={cn(
-                      "rounded-2xl font-bold shadow-lg",
-                      "bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700",
-                      "disabled:from-gray-300 disabled:to-gray-400 disabled:text-gray-500",
-                      isMobile ? "h-12 w-12" : isTablet ? "h-16 w-16" : "h-14 w-14"
-                    )}
-                  >
-                    <Send className={cn(isTablet ? "h-6 w-6" : "h-5 w-5")} />
-                  </Button>
-                </form>
-              </div>
+                  <Send className={cn(isTablet ? "h-6 w-6" : "h-5 w-5")} />
+                </Button>
+              </form>
             </div>
           </main>
+
+          {/* Voice Settings Panel */}
+          <VoiceSettingsPanel
+            isOpen={isVoiceSettingsOpen}
+            onClose={() => setIsVoiceSettingsOpen(false)}
+            currentLanguage={state.currentLanguage}
+          />
+
+          {/* First Interaction Prompt */}
+          <FirstInteractionPrompt
+            isVisible={showFirstInteractionPrompt}
+            onDismiss={handleDismissPrompt}
+            currentLanguage={state.currentLanguage}
+          />
+
+          {/* Interaction Overlay */}
+          {!hasUserInteracted && (
+            <div 
+              className="fixed inset-0 bg-black bg-opacity-20 flex items-center justify-center z-40 cursor-pointer"
+              onClick={handleEnableVoice}
+            >
+              <div className="bg-white rounded-lg p-6 max-w-md mx-4 text-center">
+                <Volume2 className="h-12 w-12 mx-auto mb-4 text-blue-500" />
+                <h3 className="text-lg font-semibold mb-2">
+                  {state.currentLanguage === 'en' ? 'Enable Voice' : 'Stimme aktivieren'}
+                </h3>
+                {isWaitingForInteraction ? (
+                  <>
+                <p className="text-gray-600 mb-4">
+                  {state.currentLanguage === 'en' 
+                    ? 'Click anywhere to enable voice responses' 
+                    : 'Klicken Sie irgendwo, um Sprachantworten zu aktivieren'}
+                </p>
+                        <div className="flex items-center justify-center mb-4">
+                    <div className="animate-bounce">
+                      <Volume2 className="h-6 w-6 text-blue-500" />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-gray-600 mb-4">
+                  {state.currentLanguage === 'en' 
+                    ? 'Click anywhere to enable voice responses' 
+                    : 'Klicken Sie irgendwo, um Sprachantworten zu aktivieren'}
+                </p>
+              )}
+                <Button onClick={handleEnableVoice}>
+                  {state.currentLanguage === 'en' ? 'Enable Voice' : 'Stimme aktivieren'}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       </ToastProvider>
     </TooltipProvider>
