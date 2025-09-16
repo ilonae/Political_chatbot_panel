@@ -36,8 +36,9 @@ import {
 import ChatBubble from './ChatBubble';
 import ThinkingIndicator from './ThinkingIndicator';
 import LanguageToggle from './LanguageToggle';
+import RecommendedAnswers from './RecommendedAnswers';
 import { Message, ChatState } from '../types/Chat';
-import { sendMessage, startConversation, resetConversation } from '../services/api';
+import { API_BASE_URL, sendMessage, startConversation, resetConversation } from '../services/api';
 
 const ChatInterface: React.FC = () => {
   const [state, setState] = useState<ChatState>({
@@ -45,7 +46,9 @@ const ChatInterface: React.FC = () => {
     isThinking: false,
     currentTopic: 'Political ideologies and perspectives',
     messageCount: 0,
-    currentLanguage: 'en'
+    currentLanguage: 'en',
+    recommendedAnswers: [],
+    isGeneratingRecommendations: false
   });
   const [inputText, setInputText] = useState('');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -78,7 +81,7 @@ const ChatInterface: React.FC = () => {
   }, [state.messages]);
 
   const initializeConversation = async () => {
-    setState(prev => ({ ...prev, isThinking: true }));
+    setState(prev => ({ ...prev, isThinking: true, isGeneratingRecommendations: true }));
     try {
       const response = await startConversation(state.currentLanguage);
       const newMessage: Message = {
@@ -94,7 +97,9 @@ const ChatInterface: React.FC = () => {
         messages: [newMessage],
         messageCount: response.message_count,
         currentTopic: response.topic,
-        isThinking: false
+        isThinking: false,
+        recommendedAnswers: response.recommended_answers || [],
+        isGeneratingRecommendations: false
       }));
     } catch (error) {
       console.error('Failed to start conversation:', error);
@@ -111,7 +116,8 @@ const ChatInterface: React.FC = () => {
       setState(prev => ({
         ...prev,
         messages: [errorMessage],
-        isThinking: false
+        isThinking: false,
+        isGeneratingRecommendations: false
       }));
     }
   };
@@ -120,33 +126,60 @@ const ChatInterface: React.FC = () => {
     initializeConversation();
   }, []);
 
-  const handleLanguageChange = (language: 'en' | 'de') => {
-    setState(prev => ({ ...prev, currentLanguage: language }));
-    
+  const handleLanguageChange = async (language: 'en' | 'de') => {
+    // Show loading state briefly
+    setState(prev => ({ 
+      ...prev, 
+      isThinking: true,
+      isGeneratingRecommendations: false
+    }));
+  
+    // Add language change message
     const languageMessage: Message = {
       id: Date.now().toString(),
       sender: 'System',
       message: language === 'en' 
-        ? 'Language switched to English' 
-        : 'Sprache auf Deutsch gewechselt',
+        ? 'Language switched to English. Send a message to continue in English...' 
+        : 'Sprache auf Deutsch gewechselt. Senden Sie eine Nachricht, um auf Deutsch fortzufahren...',
       type: 'system',
       timestamp: new Date(),
       language
     };
-    
+  
+    // Update frontend state - the backend will update on next message send
     setState(prev => ({
       ...prev,
-      messages: [...prev.messages, languageMessage]
+      currentLanguage: language,
+      recommendedAnswers: [], // Clear old recommendations
+      messages: [...prev.messages, languageMessage],
+      isThinking: false
+    }));
+  
+    // Generate fallback recommendations in the new language
+    const fallbackRecommendations = [
+      { id: 'rec_1', text: language === 'en' ? 'Continue in English' : 'Auf Deutsch fortsetzen' },
+      { id: 'rec_2', text: language === 'en' ? 'What are your thoughts?' : 'Was sind Ihre Gedanken?' },
+      { id: 'rec_3', text: language === 'en' ? 'Tell me more' : 'Erzählen Sie mehr' }
+    ];
+  
+    setState(prev => ({
+      ...prev,
+      recommendedAnswers: fallbackRecommendations
     }));
   };
 
-  const handleSendMessage = async () => {
-    if (!inputText.trim() || state.isThinking) return;
+  const handleSendMessage = async (messageText?: string) => {
+    const textToSend = messageText || inputText.trim();
+    console.log('Sending message:', textToSend);
+    console.log('Message text param:', messageText);
+    console.log('Input text:', inputText);
+    
+    if (!textToSend || state.isThinking) return;
 
     const userMessage: Message = {
       id: Date.now().toString(),
       sender: 'You',
-      message: inputText.trim(),
+      message: textToSend,
       type: 'user',
       timestamp: new Date(),
       language: state.currentLanguage
@@ -155,26 +188,38 @@ const ChatInterface: React.FC = () => {
     setState(prev => ({
       ...prev,
       messages: [...prev.messages, userMessage],
-      isThinking: true
+      isThinking: true,
+      isGeneratingRecommendations: false,
+      recommendedAnswers: []
     }));
-    setInputText('');
+    
+    if (!messageText) {
+      setInputText('');
+    }
 
     try {
-      const response = await sendMessage(inputText.trim(), state.currentLanguage);
-      const newMessages: Message[] = response.responses.map((res:any) => ({
+      // FIXED: Use textToSend instead of inputText.trim()
+      const response = await sendMessage(textToSend, state.currentLanguage);
+      console.log('API response:', response);
+      
+      const botMessage: Message = {
         id: Date.now().toString() + Math.random(),
-        ...res,
+        sender: 'Debate Partner',
+        message: response.responses[0].message,
+        type: 'partner',
         timestamp: new Date(),
         language: state.currentLanguage
-      }));
-
+      };  
       setState(prev => ({
         ...prev,
-        messages: [...prev.messages, ...newMessages],
+        messages: [...prev.messages, botMessage],
         messageCount: response.message_count,
         currentTopic: response.topic,
-        isThinking: false
+        isThinking: false,
+        recommendedAnswers: response.recommended_answers || [],
+        isGeneratingRecommendations: false
       }));
+
     } catch (error) {
       console.error('Failed to send message:', error);
       const errorMessage: Message = {
@@ -190,13 +235,19 @@ const ChatInterface: React.FC = () => {
       setState(prev => ({
         ...prev,
         messages: [...prev.messages, errorMessage],
-        isThinking: false
+        isThinking: false,
+        isGeneratingRecommendations: false
       }));
     }
   };
 
+  const handleRecommendedAnswerSelect = (answer: string) => {
+    console.log('Selected recommended answer:', answer);
+    handleSendMessage(answer);
+  };
+
   const handleReset = async () => {
-    setState(prev => ({ ...prev, isThinking: true }));
+    setState(prev => ({ ...prev, isThinking: true, isGeneratingRecommendations: true  }));
     try {
       await resetConversation();
       initializeConversation();
@@ -215,7 +266,8 @@ const ChatInterface: React.FC = () => {
       setState(prev => ({
         ...prev,
         messages: [...prev.messages, errorMessage],
-        isThinking: false
+        isThinking: false,
+        isGeneratingRecommendations: false
       }));
     }
   };
@@ -243,12 +295,10 @@ const ChatInterface: React.FC = () => {
                 <SheetContent side="left" className="w-80">
                   <SheetHeader>
                     <SheetTitle>
-                      {state.currentLanguage === 'en' ? 'Chat Settings' : 'Chat-Einstellungen'}
+                      {getTranslatedText('Chat Settings', state.currentLanguage)}
                     </SheetTitle>
                     <SheetDescription>
-                      {state.currentLanguage === 'en' 
-                        ? 'Configure your debate experience' 
-                        : 'Konfigurieren Sie Ihre Debatten-Erfahrung'}
+                      {getTranslatedText('Configure your debate experience', state.currentLanguage)}
                     </SheetDescription>
                   </SheetHeader>
                   <div className="grid gap-4 py-4">
@@ -257,12 +307,10 @@ const ChatInterface: React.FC = () => {
                       {isTablet && <Tablet className="h-4 w-4" />}
                       {!isMobile && !isTablet && <Monitor className="h-4 w-4" />}
                       <span className="text-sm text-muted-foreground">
-                        {isMobile 
-                          ? (state.currentLanguage === 'en' ? 'Mobile' : 'Mobil') 
-                          : isTablet 
-                            ? (state.currentLanguage === 'en' ? 'Tablet' : 'Tablet')
-                            : (state.currentLanguage === 'en' ? 'Desktop' : 'Desktop')
-                        } {state.currentLanguage === 'en' ? 'view' : 'Ansicht'}
+                        {getTranslatedText(
+                          isMobile ? 'Mobile view' : isTablet ? 'Tablet view' : 'Desktop view',
+                          state.currentLanguage
+                        )}
                       </span>
                     </div>
                   </div>
@@ -270,14 +318,14 @@ const ChatInterface: React.FC = () => {
               </Sheet>
 
               <h1 className="text-xl font-semibold text-foreground">
-              {getTranslatedText('Confronting Fascism: An AI Dialogue', state.currentLanguage)}
+                {getTranslatedText('Confronting Fascism: An AI Dialogue', state.currentLanguage)}
               </h1>
             </div>
 
             <div className="flex items-center gap-2">
               <div className="hidden md:flex">
                 <span className="text-sm text-muted-foreground bg-muted px-2 py-1 rounded-md">
-                {getTranslatedText(state.currentTopic, state.currentLanguage)}
+                  {getTranslatedText(state.currentTopic, state.currentLanguage)}
                 </span>
               </div>
 
@@ -294,9 +342,7 @@ const ChatInterface: React.FC = () => {
                   </div>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {state.currentLanguage === 'en' 
-                    ? 'Switch language (EN/DE)' 
-                    : 'Sprache wechseln (EN/DE)'}
+                  {getTranslatedText('Switch language (EN/DE)', state.currentLanguage)}
                 </TooltipContent>
               </Tooltip>
 
@@ -316,8 +362,8 @@ const ChatInterface: React.FC = () => {
                 </TooltipTrigger>
                 <TooltipContent>
                   {voiceEnabled 
-                    ? (state.currentLanguage === 'en' ? 'Mute voice' : 'Ton stummschalten')
-                    : (state.currentLanguage === 'en' ? 'Unmute voice' : 'Ton einschalten')
+                    ? getTranslatedText('Mute voice', state.currentLanguage)
+                    : getTranslatedText('Unmute voice', state.currentLanguage)
                   }
                 </TooltipContent>
               </Tooltip>
@@ -329,9 +375,7 @@ const ChatInterface: React.FC = () => {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {state.currentLanguage === 'en' 
-                    ? 'Reset conversation' 
-                    : 'Konversation zurücksetzen'}
+                  {getTranslatedText('Reset conversation', state.currentLanguage)}
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -364,6 +408,16 @@ const ChatInterface: React.FC = () => {
                 ))}
               </AnimatePresence>
 
+              {/* Recommended Answers */}
+              {state.messages.length > 0 && (
+                <RecommendedAnswers
+                  answers={state.recommendedAnswers}
+                  onAnswerSelect={handleRecommendedAnswerSelect}
+                  isLoading={state.isGeneratingRecommendations}
+                  language={state.currentLanguage}
+                />
+              )}
+
               {state.isThinking && (
                 <ThinkingIndicator 
                   isMobile={isMobile} 
@@ -385,11 +439,7 @@ const ChatInterface: React.FC = () => {
                   className="flex gap-3 items-end"
                 >
                   <Input
-                    placeholder={
-                      state.currentLanguage === 'en' 
-                        ? "Type your response..." 
-                        : "Geben Sie Ihre Antwort ein..."
-                    }
+                    placeholder={getTranslatedText("Type your response...", state.currentLanguage)}
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
                     onKeyPress={handleKeyPress}
