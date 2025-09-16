@@ -1,3 +1,4 @@
+from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
@@ -20,6 +21,7 @@ async def send_message(request: ChatRequest):
         )
         
         print(f"Sending response: {response}")
+        print(f"Recommended answers: {[ra.text for ra in response['recommended_answers']]}")
         return response
         
     except Exception as e:
@@ -35,6 +37,7 @@ async def start_conversation(request: StartConversationRequest):
             request.language
         )
         print(f"Opening message: {response['opening_message']}")
+        print(f"Recommended answers: {[ra.text for ra in response['recommended_answers']]}")
         return response
     except Exception as e:
         print(f"Error in start_conversation: {str(e)}")
@@ -65,3 +68,44 @@ async def start_conversation_legacy(session_id: str = Query("default"), language
 @router.get("/start_conversation_legacy", include_in_schema=False)
 async def start_conversation_legacy2(session_id: str = Query("default"), language: str = Query("en")):
     return await ChatService.start_conversation(session_id, language)
+
+@router.post("/generate_recommendations")
+async def generate_recommendations(
+    user_input: str,
+    conversation_history: str,
+    session_id: str = "default",
+    language: Literal['en', 'de'] = 'en'
+):
+    try:
+        print(f"Generating recommendations for: {user_input}")
+        print(f"Language: {language}")
+        
+        recommended_answers = await ChatService._get_recommended_answers(
+            user_input, session_id, language
+        )
+        
+        return {"recommended_answers": recommended_answers}
+        
+    except Exception as e:
+        print(f"Error generating recommendations: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/update_language")
+async def update_language(
+    session_id: str = Query("default", description="Session ID"),
+    language: Literal['en', 'de'] = Query('en', description="Language to switch to")
+):
+    try:
+        print(f"Updating language to {language} for session: {session_id}")
+        
+        # Update the language in the chat service
+        success = await ChatService.update_language(session_id, language)
+        
+        if success:
+            return {"status": "success", "language": language, "message": "Language updated successfully"}
+        else:
+            raise HTTPException(status_code=404, detail="Session not found")
+            
+    except Exception as e:
+        print(f"Error updating language: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
