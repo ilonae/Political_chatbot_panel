@@ -1,4 +1,4 @@
-import { ApiResponse, StartConversationResponse, RecommendedAnswer } from '../types/Chat';
+import { StartConversationResponse, RecommendedAnswer } from '../types/Chat';
 
 export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
