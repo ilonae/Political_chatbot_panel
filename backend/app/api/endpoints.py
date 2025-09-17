@@ -1,11 +1,25 @@
+import io
+import os
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse
-
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 from app.services.chat_service import ChatService
 from app.models.chat import ChatRequest, ChatResponse, StartConversationRequest, StartConversationResponse, ResetResponse
+from openai import AsyncOpenAI
+
+from app.core.config import settings
+
+# Initialize OpenAI client
+client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY))
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+
+class GenerateSpeechRequest(BaseModel):
+    text: str
+    language: str = "en"
+    sender: str = "Debate Partner" 
+
 
 @router.post("/message", response_model=ChatResponse)
 async def send_message(request: ChatRequest):
@@ -69,6 +83,7 @@ async def start_conversation_legacy(session_id: str = Query("default"), language
 async def start_conversation_legacy2(session_id: str = Query("default"), language: str = Query("en")):
     return await ChatService.start_conversation(session_id, language)
 
+
 @router.post("/generate_recommendations")
 async def generate_recommendations(
     user_input: str,
@@ -108,4 +123,46 @@ async def update_language(
             
     except Exception as e:
         print(f"Error updating language: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/generate_speech")
+async def generate_speech_endpoint(request: GenerateSpeechRequest):
+    try:
+        print(f"Generating speech for text: {request.text}")
+        print(f"Language: {request.language}, Sender: {request.sender}")
+        
+        # Map language to voice (OpenAI supports: alloy, echo, fable, onyx, nova, shimmer)
+        voice_mapping = {
+            "Debate Partner": {"en": "onyx", "de": "onyx"},
+            "You": {"en": "nova", "de": "nova"},
+            "System": {"en": "alloy", "de": "alloy"},
+            "default": {"en": "shimmer", "de": "shimmer"}
+        }
+        
+        voice_info = voice_mapping.get(request.sender, voice_mapping["default"])
+        voice = voice_info.get(request.language, "shimmer")
+        
+        # Generate speech using OpenAI TTS
+        response = await client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=request.text,
+            speed=1.0  # Slightly faster for more natural speech
+        )
+        
+        # For async client, read the content as bytes
+        audio_buffer = await response.aread()
+        
+        # Return as streaming response
+        return StreamingResponse(
+            io.BytesIO(audio_buffer),
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "inline; filename=speech.mp3",
+                "Content-Type": "audio/mpeg"
+            }
+        )
+        
+    except Exception as e:
+        print(f"Error generating speech with OpenAI: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
