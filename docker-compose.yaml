@@ -1,0 +1,19 @@
+services:
+  backend:
+    build: ./backend
+    container_name: chatbot-backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
+    volumes:
+      - ./backend:/app
+    ports:
+      - "5000:5000"
+
+  frontend:
+    build: ./frontend
+    container_name: chatbot-frontend
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000

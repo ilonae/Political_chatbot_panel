@@ -1,11 +1,7 @@
-from openai import OpenAI
-import os, io
-from fastapi.responses import StreamingResponse
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-from app.core.config import settings
 from app.api.endpoints import router as chat_router
 from app.models.chat import ChatRequest, StartConversationRequest 
 
@@ -23,8 +19,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-       allow_origins=["http://localhost:3000", "http://localhost:5000"],
     allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

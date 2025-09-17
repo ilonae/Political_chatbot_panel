@@ -2,7 +2,7 @@ import io
 import os
 from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import  StreamingResponse
 from pydantic import BaseModel
 from app.services.chat_service import ChatService
 from app.models.chat import ChatRequest, ChatResponse, StartConversationRequest, StartConversationResponse, ResetResponse
