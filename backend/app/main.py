@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from openai import APIError, APIConnectionError, RateLimitError
 
-from app.core.config import settings
 from app.api.endpoints import router as chat_router
 from app.models.chat import ChatRequest, StartConversationRequest
 
