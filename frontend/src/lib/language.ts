@@ -1,5 +1,9 @@
 export const getTranslatedText = (text: string, language: 'en' | 'de'): string => {
   const translations: Record<string, { en: string; de: string }> = {
+    'Confronting Fascism: An AI Dialogue': {
+    en: 'Confronting Fascism: An AI Dialogue',
+    de: 'Konfrontation mit Faschismus: Ein KI-Dialog'
+  },
     'Generating suggestions...': {
       en: 'Generating suggestions...',
       de: 'Vorschläge werden generiert...'
@@ -12,6 +16,14 @@ export const getTranslatedText = (text: string, language: 'en' | 'de'): string =
       en: 'Use this suggestion',
       de: 'Diesen Vorschlag verwenden'
     },
+    'You:': {
+      en: 'You:',
+      de: 'Du:'
+    },
+    'Debate Partner:': {
+      en: 'Debate Partner:',
+      de: 'Diskussionspartner:'
+    },
     // Add other translations as needed
   };
 
@@ -19,7 +31,3 @@ export const getTranslatedText = (text: string, language: 'en' | 'de'): string =
 };
 
   
-  
-  export const getTranslatedSender = (sender: string, language: 'en' | 'de'): string => {
-    return getTranslatedText(sender, language);
-  };
