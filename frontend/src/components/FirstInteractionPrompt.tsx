@@ -18,14 +18,7 @@ const FirstInteractionPrompt: React.FC<FirstInteractionPromptProps> = ({
   const handleEnableVoice = () => {
     voiceService.setUserInteracted();
     onDismiss();
-    
-    // Play a welcome message
-    const welcomeText = currentLanguage === 'en' 
-      ? 'Voice features are now enabled. Welcome to the debate!' 
-      : 'Sprachfunktionen sind jetzt aktiviert. Willkommen zur Debatte!';
-    
-    voiceService.speakText(welcomeText, 'System', currentLanguage).catch(console.error);
-  };
+    };
 
   return (
     <AnimatePresence>

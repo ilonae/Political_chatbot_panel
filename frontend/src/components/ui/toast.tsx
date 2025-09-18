@@ -67,7 +67,11 @@ const ToastAction = React.forwardRef<
   />
 ))
 ToastAction.displayName = ToastPrimitives.Action.displayName
-
+const useToast = () => ({
+  toast: ({ title, description, variant }: { title: string; description: string; variant: string }) => {
+    console.log(`[${variant}] ${title}: ${description}`);
+  },
+});
 const ToastClose = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Close>,
   React.ComponentPropsWithoutRef<typeof ToastPrimitives.Close>
@@ -124,4 +128,5 @@ export {
   ToastDescription,
   ToastClose,
   ToastAction,
+  useToast
 }
