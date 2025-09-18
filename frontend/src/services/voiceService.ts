@@ -18,6 +18,22 @@ interface PendingAudio {
   sender: string;
   language: 'en' | 'de';
   timestamp: number;
+  retryCount: number;
+}
+
+interface VoiceServiceStatus {
+  openai: boolean;
+  browser: boolean;
+  preferred: 'openai' | 'browser';
+  current: 'openai' | 'browser' | 'none';
+  userInteracted: boolean;
+  pendingAudio: number;
+  canPlayAudio: boolean;
+  lastError?: string;
+  serviceHealth: {
+    openai: 'healthy' | 'degraded' | 'unavailable';
+    browser: 'healthy' | 'degraded' | 'unavailable';
+  };
 }
 
 class VoiceServiceImplementation implements VoiceService {
@@ -26,9 +42,87 @@ class VoiceServiceImplementation implements VoiceService {
   private pendingAudio: PendingAudio[] = [];
   private maxPendingAudio = 10;
   private currentPlayback: { stop: () => void } | null = null;
+  private serviceHealth: { openai: 'healthy' | 'degraded' | 'unavailable'; browser: 'healthy' | 'degraded' | 'unavailable' } = {
+    openai: 'healthy',
+    browser: 'healthy',
+  };
+  private errorCount = {
+    openai: 0,
+    browser: 0,
+  };
+  private readonly MAX_RETRIES = 3;
+  private readonly RETRY_DELAY = 1000; // 1 second
+  private readonly HEALTH_CHECK_INTERVAL = 30000; // 30 seconds
+  private isPlaying = false;
+  private playbackQueue: PendingAudio[] = [];
+  private lastError: string | null = null;
+
+  constructor() {
+    this.startHealthChecks();
+  }
+
+  private startHealthChecks(): void {
+    setInterval(() => {
+      this.checkServiceHealth();
+    }, this.HEALTH_CHECK_INTERVAL);
+  }
+
+  private async checkServiceHealth(): Promise<void> {
+    // Reset error counts periodically for recovery
+    if (this.errorCount.openai > 0) {
+      this.errorCount.openai = Math.max(0, this.errorCount.openai - 1);
+      if (this.errorCount.openai === 0) {
+        this.serviceHealth.openai = 'healthy';
+      }
+    }
+
+    if (this.errorCount.browser > 0) {
+      this.errorCount.browser = Math.max(0, this.errorCount.browser - 1);
+      if (this.errorCount.browser === 0) {
+        this.serviceHealth.browser = 'healthy';
+      }
+    }
+  }
+
+  private updateServiceHealth(service: 'openai' | 'browser', error: boolean): void {
+    if (error) {
+      this.errorCount[service]++;
+      
+      if (this.errorCount[service] >= 3) {
+        this.serviceHealth[service] = 'unavailable';
+      } else if (this.errorCount[service] >= 1) {
+        this.serviceHealth[service] = 'degraded';
+      }
+    } else {
+      this.errorCount[service] = 0;
+      this.serviceHealth[service] = 'healthy';
+    }
+  }
+
+  private getBestAvailableService(): 'openai' | 'browser' | 'none' {
+    // Prefer the preferred service if healthy
+    if (this.preferredService === 'openai' && this.serviceHealth.openai !== 'unavailable' && openaiVoiceService.isSupported()) {
+      return 'openai';
+    }
+    
+    if (this.preferredService === 'browser' && this.serviceHealth.browser !== 'unavailable' && browserVoiceService.isSupported()) {
+      return 'browser';
+    }
+
+    // Fallback to the other service if preferred is unavailable
+    if (this.preferredService === 'openai' && this.serviceHealth.browser !== 'unavailable' && browserVoiceService.isSupported()) {
+      return 'browser';
+    }
+
+    if (this.preferredService === 'browser' && this.serviceHealth.openai !== 'unavailable' && openaiVoiceService.isSupported()) {
+      return 'openai';
+    }
+
+    return 'none';
+  }
 
   canPlayAudio(): boolean {
-    return this.userInteractedValue && typeof document !== 'undefined';
+    return this.userInteractedValue && typeof document !== 'undefined' && this.getBestAvailableService() !== 'none';
   }
 
   setUserInteracted(): void {
@@ -38,7 +132,7 @@ class VoiceServiceImplementation implements VoiceService {
     console.log('User interaction detected - voice features enabled');
     this.clearPendingAudio();
     setTimeout(() => {
-      this.playPendingAudio();
+      this.processPlaybackQueue();
     }, 200);
   }
 
@@ -47,73 +141,93 @@ class VoiceServiceImplementation implements VoiceService {
   }
 
   getPendingAudioCount(): number {
-    return this.pendingAudio.length;
+    return this.pendingAudio.length + this.playbackQueue.length;
   }
 
   clearPendingAudio(): void {
     this.pendingAudio = [];
+    this.playbackQueue = [];
   }
 
   private stopCurrentPlayback(): void {
     if (this.currentPlayback) {
-      this.currentPlayback.stop();
-      this.currentPlayback = null;
+      try {
+        this.currentPlayback.stop();
+      } catch (error) {
+        console.warn('Error stopping playback:', error);
+      } finally {
+        this.currentPlayback = null;
+      }
     }
+    this.isPlaying = false;
   }
 
-  private async playPendingAudio(): Promise<void> {
-    if (!this.userInteractedValue || this.pendingAudio.length === 0) return;
+  private async processPlaybackQueue(): Promise<void> {
+    if (this.isPlaying || this.playbackQueue.length === 0) return;
 
-    console.log(`Playing ${this.pendingAudio.length} pending audio messages`);
-    
-    const audioToPlay = [...this.pendingAudio];
-    this.pendingAudio = [];
+    this.isPlaying = true;
+    const audioItem = this.playbackQueue.shift()!;
 
-    for (let i = 0; i < audioToPlay.length; i++) {
-      const audio = audioToPlay[i];
-      try {
-
-        if (!this.canPlayAudio()) {
-          console.log('Skipping audio playback - user has not interacted yet');
-          continue;
-        }
-        await this.playAudioImmediately(audio.text, audio.sender, audio.language);
-        
-        // Add delay between messages (except for the last one)
-        if (i < audioToPlay.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        }
-      } catch (error) {
-        console.error('Failed to play pending audio:', error);
+    try {
+      await this.playAudioWithRetry(audioItem.text, audioItem.sender, audioItem.language, audioItem.retryCount);
+    } catch (error) {
+      console.error('Failed to play audio from queue:', error);
+    } finally {
+      this.isPlaying = false;
+      
+      // Process next item in queue after a short delay
+      if (this.playbackQueue.length > 0) {
+        setTimeout(() => this.processPlaybackQueue(), 500);
       }
     }
   }
 
-  private async playAudioImmediately(text: string, sender: string, language: 'en' | 'de'): Promise<void> {
+  private async playAudioWithRetry(
+    text: string, 
+    sender: string, 
+    language: 'en' | 'de', 
+    retryCount = 0
+  ): Promise<void> {
     try {
       if (!this.canPlayAudio()) {
-        console.log('Cannot play audio - user has not interacted yet');
-        return;
+        throw new Error('Cannot play audio - user has not interacted or no service available');
       }
 
       this.stopCurrentPlayback();
 
-      if (openaiVoiceService.isSupported()) {
-        this.currentPlayback = {
-          stop: () => openaiVoiceService.stop()
-        };
+      const serviceType = this.getBestAvailableService();
+      
+      if (serviceType === 'openai') {
+        this.currentPlayback = { stop: () => openaiVoiceService.stop() };
         await openaiVoiceService.speakText(text, sender, language);
+        this.updateServiceHealth('openai', false);
+      } else if (serviceType === 'browser') {
+        this.currentPlayback = { stop: () => browserVoiceService.stop() };
+        await browserVoiceService.speakText(text, language);
+        this.updateServiceHealth('browser', false);
+      } else {
+        throw new Error('No supported voice service available');
       }
-      else if (browserVoiceService.isSupported()) {
-        this.currentPlayback = {
-          stop: () => browserVoiceService.stop()
-        };
-        return await browserVoiceService.speakText(text, language);
-      }else {
-        console.warn('No supported voice service available');
-      }
+
     } catch (error) {
-      console.error('Voice service error:', error);
+      console.error(`Voice service error (attempt ${retryCount + 1}):`, error);
+      this.lastError = error instanceof Error ? error.message : 'Unknown error';
+
+      // Update service health
+      if (this.getBestAvailableService() === 'openai') {
+        this.updateServiceHealth('openai', true);
+      } else {
+        this.updateServiceHealth('browser', true);
+      }
+
+      // Retry logic
+      if (retryCount < this.MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY * (retryCount + 1)));
+        return this.playAudioWithRetry(text, sender, language, retryCount + 1);
+      }
+
+      throw new Error(`Failed to play audio after ${this.MAX_RETRIES} attempts: ${this.lastError}`);
+    } finally {
       this.currentPlayback = null;
     }
   }
@@ -125,14 +239,17 @@ class VoiceServiceImplementation implements VoiceService {
       return;
     }
 
+    const audioItem: PendingAudio = {
+      text,
+      sender,
+      language,
+      timestamp: Date.now(),
+      retryCount: 0
+    };
+
     if (!this.userInteractedValue) {
       if (this.pendingAudio.length < this.maxPendingAudio) {
-        this.pendingAudio.push({
-          text,
-          sender,
-          language,
-          timestamp: Date.now()
-        });
+        this.pendingAudio.push(audioItem);
         console.log('Audio queued (waiting for user interaction). Queued:', this.pendingAudio.length);
       } else {
         console.warn('Audio queue full - dropping message');
@@ -140,7 +257,11 @@ class VoiceServiceImplementation implements VoiceService {
       return;
     }
 
-    return this.playAudioImmediately(text, sender, language);
+    // Add to playback queue and process
+    this.playbackQueue.push(audioItem);
+    if (!this.isPlaying) {
+      this.processPlaybackQueue();
+    }
   }
 
   stop(): void {
@@ -148,16 +269,15 @@ class VoiceServiceImplementation implements VoiceService {
     openaiVoiceService.stop();
     browserVoiceService.stop();
     this.clearPendingAudio();
+    this.playbackQueue = [];
   }
 
   isSupported(): boolean {
-    return true;
+    return openaiVoiceService.isSupported() || browserVoiceService.isSupported();
   }
 
   getServiceType(): 'openai' | 'browser' | 'none' {
-    if (this.preferredService === 'openai') return 'openai';
-    if (browserVoiceService.isSupported()) return 'browser';
-    return 'none';
+    return this.getBestAvailableService();
   }
 
   setPreferredService(service: 'openai' | 'browser'): void {
@@ -165,30 +285,55 @@ class VoiceServiceImplementation implements VoiceService {
     console.log(`Preferred voice service set to: ${service}`);
   }
 
-  getStatus() {
+  getStatus(): VoiceServiceStatus {
     return {
-      openai: true,
+      openai: openaiVoiceService.isSupported(),
       browser: browserVoiceService.isSupported(),
       preferred: this.preferredService,
       current: this.getServiceType(),
       userInteracted: this.userInteractedValue,
-      pendingAudio: this.pendingAudio.length,
-      canPlayAudio: this.canPlayAudio()
+      pendingAudio: this.getPendingAudioCount(),
+      canPlayAudio: this.canPlayAudio(),
+      lastError: this.lastError || undefined,
+      serviceHealth: { ...this.serviceHealth }
     };
   }
 
   getPendingAudioMessages(): PendingAudio[] {
-    return [...this.pendingAudio];
+    return [...this.pendingAudio, ...this.playbackQueue];
   }
 
   cleanupOldPendingAudio(): void {
     const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
     this.pendingAudio = this.pendingAudio.filter(audio => audio.timestamp > fiveMinutesAgo);
+    this.playbackQueue = this.playbackQueue.filter(audio => audio.timestamp > fiveMinutesAgo);
+  }
+
+  // Emergency recovery method
+  async resetServices(): Promise<void> {
+    this.stop();
+    this.errorCount.openai = 0;
+    this.errorCount.browser = 0;
+    this.serviceHealth.openai = 'healthy';
+    this.serviceHealth.browser = 'healthy';
+    this.lastError = null;
+    console.log('Voice services reset');
   }
 }
 
 export const voiceService = new VoiceServiceImplementation();
 
+// Cleanup and health monitoring
 setInterval(() => {
   voiceService.cleanupOldPendingAudio();
 }, 60 * 1000);
+
+// Global error handler for uncaught voice errors
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    if (event.reason && event.reason.message && event.reason.message.includes('voice')) {
+      console.error('Unhandled voice error:', event.reason);
+      event.preventDefault();
+    }
+  });
+}
