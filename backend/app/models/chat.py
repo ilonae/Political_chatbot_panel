@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Literal, List
+from typing import Literal, List
 
 class RecommendedAnswer(BaseModel):
     text: str
