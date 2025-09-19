@@ -16,37 +16,31 @@ type Config = {
   onUpdate?: (registration: ServiceWorkerRegistration) => void;
 };
 
-export function register(config?: Config) {
+export function register(config?: any) {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('Service worker completely disabled in development mode');
+    // Also unregister any existing service workers
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function(registrations) {
+        for (let registration of registrations) {
+          registration.unregister();
+        }
+      });
+    }
+    return;
+  }
   if ('serviceWorker' in navigator) {
-    const publicUrl = new URL(
-      process.env.PUBLIC_URL,
-      window.location.href
-    );
+    const publicUrl = new URL(process.env.PUBLIC_URL || '', window.location.href);
     if (publicUrl.origin !== window.location.origin) {
       return;
     }
 
     window.addEventListener('load', () => {
       const swUrl = `${process.env.PUBLIC_URL}/service-worker.js`;
-
-      if (isLocalhost) {
-        // This is running on localhost. Check if service worker exists.
-        checkValidServiceWorker(swUrl, config);
-
-        // Log helpful messages
-        navigator.serviceWorker.ready.then(() => {
-          console.log(
-            'This web app is being served cache-first by a service worker.'
-          );
-        });
-      } else {
-        // Register service worker in production
-        registerValidSW(swUrl, config);
-      }
+      registerValidSW(swUrl, config);
     });
   }
 }
-
 
 function registerValidSW(swUrl: string, config?: Config) {
   navigator.serviceWorker
@@ -118,4 +112,3 @@ export function unregister() {
       });
   }
 }
-

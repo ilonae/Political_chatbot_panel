@@ -10,14 +10,40 @@ from app.models.chat import RecommendedAnswer
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client with error handling
-try:
-    client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY", settings.OPENAI_API_KEY))
-    if not client.api_key:
-        logger.warning("OpenAI API key not configured")
-except Exception as e:
-    logger.error(f"Failed to initialize OpenAI client: {e}")
-    client = None
+# Global AsyncOpenAI client instance
+async_openai_client = None
+
+async def initialize_async_openai_client():
+    """Initialize the AsyncOpenAI client with configuration from settings."""
+    global async_openai_client
+    try:
+        # Get configuration from settings
+        openai_config = settings.get_openai_config()
+        api_key = openai_config.get('api_key')
+        
+        if not api_key:
+            logger.error("OpenAI API key not configured in settings")
+            return False
+        
+        # Initialize the async client
+        async_openai_client = AsyncOpenAI(
+            api_key=api_key,
+            timeout=openai_config.get('timeout', 30),
+            max_retries=openai_config.get('max_retries', 3)
+        )
+        
+        # Test the client with a simple request
+        try:
+            await async_openai_client.models.list()
+            logger.info("AsyncOpenAI client initialized and tested successfully")
+            return True
+        except Exception as test_error:
+            logger.error(f"OpenAI client test failed: {test_error}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize AsyncOpenAI client: {e}")
+        return False
 
 def get_translated_topic(topic: str, language: str) -> str:
     """Get translated topic with fallback to original topic."""
@@ -42,11 +68,23 @@ class ChatService:
     _session_languages: Dict[str, Literal['en', 'de']] = {}
     
     @classmethod
+    async def _ensure_client_initialized(cls):
+        """Ensure the OpenAI client is initialized before making API calls."""
+        global async_openai_client
+        if async_openai_client is None:
+            if not await initialize_async_openai_client():
+                raise ValueError("OpenAI client not available. Please check your API key configuration.")
+        return True
+    
+    @classmethod
     async def process_message(cls, message: str, session_id: str = "default", language: Literal['en', 'de'] = None):
         """Process user message and generate AI response."""
         try:
             if not message or not message.strip():
                 raise ValueError("Message cannot be empty")
+                
+            # Ensure client is initialized
+            await cls._ensure_client_initialized()
                 
             # Use provided language or get from session
             if language is None:
@@ -94,6 +132,9 @@ class ChatService:
         try:
             if not language or language not in ['en', 'de']:
                 raise ValueError("Invalid language specified")
+                
+            # Ensure client is initialized
+            await cls._ensure_client_initialized()
                 
             await cls._initialize_session(session_id, language)
             
@@ -226,27 +267,26 @@ class ChatService:
     async def _get_ai_response(cls, session_id: str, language: Literal['en', 'de'] = 'en') -> Optional[str]:
         """Get AI response using OpenAI API."""
         try:
-            if not client:
-                logger.error("OpenAI client not initialized")
-                return cls._get_fallback_response(language)
+            # Ensure client is initialized
+            await cls._ensure_client_initialized()
                 
             if session_id not in cls._sessions:
                 logger.error(f"Session {session_id} not found")
                 return cls._get_fallback_response(language)
             
-            language_instruction = {
+            # Add language instruction to the messages
+            messages = cls._sessions[session_id].copy()
+            messages.append({
                 "role": "system",
                 "content": f"Respond in {language.upper()} language only. Keep the response natural and in character."
-            }
+            })
             
-            temp_messages = cls._sessions[session_id] + [language_instruction]
-            
-            response = await client.chat.completions.create(
+            response = await async_openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=temp_messages,
+                messages=messages,
                 temperature=0.9,
                 max_tokens=1000,
-                timeout=30  # Add timeout
+                timeout=30
             )
             
             if not response.choices:
@@ -275,9 +315,8 @@ class ChatService:
                                        is_opening: bool = False, num_recommendations: int = 3) -> List[RecommendedAnswer]:
         """Generate recommended follow-up questions/answers using OpenAI."""
         try:
-            if not client:
-                logger.warning("OpenAI client not available, using fallback recommendations")
-                return cls._get_fallback_recommendations(language, num_recommendations)
+            # Ensure client is initialized
+            await cls._ensure_client_initialized()
             
             # Language-specific templates
             templates = {
@@ -306,7 +345,7 @@ class ChatService:
             prompt_type = 'opening' if is_opening else 'followup'
             prompt = templates[language][prompt_type]
 
-            response = await client.chat.completions.create(
+            response = await async_openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {
@@ -317,7 +356,7 @@ class ChatService:
                 ],
                 max_tokens=200,
                 temperature=0.7,
-                timeout=15  # Add timeout for recommendations
+                timeout=15
             )
             
             if not response.choices:
@@ -399,3 +438,20 @@ class ChatService:
                 ultimate_fallback = ["What is your opinion on this?"]
                 
             return [RecommendedAnswer(text=ultimate_fallback[0], id="ultimate_fallback")]
+        
+        # Add these functions at the end of your chat_service.py file
+
+async def startup_event():
+    """Initialize the OpenAI client when the application starts."""
+    logger.info("Initializing AsyncOpenAI client on startup...")
+    return await initialize_async_openai_client()
+
+async def shutdown_event():
+    """Clean up the OpenAI client when the application shuts down."""
+    global async_openai_client
+    if async_openai_client:
+        await async_openai_client.close()
+        logger.info("AsyncOpenAI client closed")
+# Initialize the client when the module is imported (optional)
+# Note: This will run when the module is imported, but async initialization
+# might be better handled in your application startup event

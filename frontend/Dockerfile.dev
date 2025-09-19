@@ -1,0 +1,22 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+# Set environment variables for React
+ENV PUBLIC_URL=.
+ENV REACT_APP_API_URL=http://localhost:5000
+ENV BROWSER=none
+ENV HOST=0.0.0.0
+
+RUN if [ -f "public/service-worker.js" ]; then \
+    mv public/service-worker.js public/service-worker.js.disabled; \
+    fi
+
+CMD ["npm", "start"]

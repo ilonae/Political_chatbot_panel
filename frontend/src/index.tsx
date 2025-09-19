@@ -4,7 +4,7 @@ import './index.css';
 import App from './App';
 
 // Import service worker registration
-import * as serviceWorkerRegistration from './serviceWorkerRegistration';
+//import * as serviceWorkerRegistration from './serviceWorkerRegistration';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -17,4 +17,3 @@ root.render(
 );
 
 // Register the service worker for PWA offline support
-serviceWorkerRegistration.register();
