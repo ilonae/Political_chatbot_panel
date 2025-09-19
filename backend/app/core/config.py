@@ -4,14 +4,17 @@ from typing import List, Optional
 from pydantic_settings import BaseSettings
 from pydantic import Field, validator, ValidationError
 from dotenv import load_dotenv
+import json
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
 try:
-    load_dotenv()
-    logger.info("Successfully loaded .env file")
+    # Load from root directory (one level up from backend)
+    env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+    load_dotenv(env_path)
+    logger.info(f"Successfully loaded .env file from {env_path}")
 except Exception as e:
     logger.warning(f"Failed to load .env file: {e}. Using system environment variables.")
 
@@ -22,9 +25,10 @@ class Settings(BaseSettings):
         description="Name of the project for logging and identification"
     )
     
-    CORS_ORIGINS: List[str] = Field(
-        default=["http://localhost:3000", "http://frontend:3000"],
-        description="List of allowed CORS origins"
+    # FIX: Use a string field for CORS origins and parse it manually
+    CORS_ORIGINS: str = Field(
+        default="http://localhost:3000,http://frontend:3000",
+        description="Comma-separated list of allowed CORS origins"
     )
     
     OPENAI_API_KEY: str = Field(
@@ -47,7 +51,7 @@ class Settings(BaseSettings):
     )
     
     API_PORT: int = Field(
-        default=8000,
+        default=5000,
         description="Port for the API server",
         ge=1,
         le=65535
@@ -73,7 +77,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = True
-        extra = "ignore"  # Ignore extra environment variables
+        extra = "ignore"
 
     @validator("OPENAI_API_KEY", pre=True, always=True)
     def validate_api_key(cls, v):
@@ -95,9 +99,9 @@ class Settings(BaseSettings):
     @validator("CORS_ORIGINS", pre=True)
     def parse_cors_origins(cls, v):
         """Parse CORS origins from string or list."""
-        if isinstance(v, str):
-            # Handle comma-separated string
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        if isinstance(v, list):
+            # If it's already a list, join with commas
+            return ",".join(v)
         return v
 
     def __init__(self, **kwargs):
@@ -123,6 +127,12 @@ class Settings(BaseSettings):
             logger.critical(f"Unexpected error during configuration initialization: {e}")
             raise
 
+    def get_cors_origins_list(self) -> List[str]:
+        """Get CORS origins as a list."""
+        if not self.CORS_ORIGINS:
+            return []
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
     def _post_init_validation(self):
         """Perform additional validation after initialization."""
         # Check if we're in production without proper API key
@@ -138,11 +148,12 @@ class Settings(BaseSettings):
 
     def _validate_production_cors(self):
         """Validate CORS settings for production environment."""
-        if not self.CORS_ORIGINS:
+        origins = self.get_cors_origins_list()
+        if not origins:
             logger.warning("No CORS origins configured for production")
             return
             
-        for origin in self.CORS_ORIGINS:
+        for origin in origins:
             if origin == "*":
                 logger.warning("Wildcard CORS origin (*) is not recommended in production")
             elif origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1"):
@@ -189,6 +200,26 @@ class Settings(BaseSettings):
             
         return True
 
+# Create a minimal settings class for emergency operation
+class EmergencySettings:
+    PROJECT_NAME = "Political AI Chatbot (Emergency Mode)"
+    CORS_ORIGINS = "http://localhost:3000"
+    OPENAI_API_KEY = ""
+    ENVIRONMENT = "development"
+    API_HOST = "0.0.0.0"
+    API_PORT = 5000
+    OPENAI_TIMEOUT = 30
+    OPENAI_MAX_RETRIES = 3
+    
+    def get_cors_origins_list(self):
+        return ["http://localhost:3000"]
+    
+    def is_development(self): return True
+    def is_production(self): return False
+    def is_staging(self): return False
+    def get_openai_config(self): return {}
+    def validate_for_usage(self): return False
+
 # Singleton instance with error handling
 try:
     settings = Settings()
@@ -197,31 +228,11 @@ try:
     if not settings.validate_for_usage():
         logger.warning("Configuration validation warnings detected")
         
-except ValidationError as e:
-    logger.critical("Failed to initialize application settings due to validation errors")
-    # Create a minimal settings object for emergency operation
-    class EmergencySettings:
-        PROJECT_NAME = "Political AI Chatbot (Emergency Mode)"
-        CORS_ORIGINS = ["http://localhost:3000"]
-        OPENAI_API_KEY = ""
-        ENVIRONMENT = "development"
-        API_HOST = "0.0.0.0"
-        API_PORT = 8000
-        OPENAI_TIMEOUT = 30
-        OPENAI_MAX_RETRIES = 3
-        
-        def is_development(self): return True
-        def is_production(self): return False
-        def is_staging(self): return False
-        def get_openai_config(self): return {}
-        def validate_for_usage(self): return False
-    
+except (ValidationError, Exception) as e:
+    logger.critical(f"Failed to initialize application settings: {e}")
+    # Fall back to emergency settings
     settings = EmergencySettings()
     logger.error("Application running in emergency mode due to configuration errors")
-    
-except Exception as e:
-    logger.critical(f"Critical error initializing settings: {e}")
-    raise
 
 # Export validated settings
 __all__ = ['settings']

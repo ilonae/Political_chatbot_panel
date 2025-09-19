@@ -1,0 +1,23 @@
+// frontend/public/service-worker.js
+const CACHE_NAME = 'chatbot-v1';
+const urlsToCache = [
+  '/',
+  '/static/js/bundle.js',
+  '/static/css/main.css',
+  '/manifest.json',
+  '/favicon.ico'
+];
+
+self.addEventListener('install', (event) => {
+  console.log('Service Worker installing.');
+  self.skipWaiting(); // Activate immediately
+});
+
+self.addEventListener('fetch', (event) => {
+  // For development, just pass through all requests
+  event.respondWith(fetch(event.request));
+});
+
+  self.addEventListener('activate', (event) => {
+    console.log('Service Worker activating.');
+  });

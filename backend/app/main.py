@@ -9,6 +9,10 @@ from openai import APIError, APIConnectionError, RateLimitError
 
 from app.api.endpoints import router as chat_router
 from app.models.chat import ChatRequest, StartConversationRequest
+from app.core.config import settings
+
+from dotenv import load_dotenv
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -16,6 +20,11 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Load environment variables from root .env - FIXED PATH
+env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+load_dotenv(env_path)
+logger.info(f"Loaded environment from {env_path}")
 
 # Global variable to track application state
 app_state = {}
@@ -34,6 +43,10 @@ async def lifespan(app: FastAPI):
             "ready": False,
             "shutting_down": False
         })
+
+        # Initialize OpenAI client on startup
+        from app.services.chat_service import startup_event
+        await startup_event()
         
         # Validate configuration before starting
         if not settings.validate_for_usage():
@@ -52,6 +65,10 @@ async def lifespan(app: FastAPI):
         raise
         
     finally:
+        # Cleanup on shutdown
+        from app.services.chat_service import shutdown_event
+        await shutdown_event()
+
         shutdown_time = time.time()
         app_state.update({
             "shutting_down": True,
@@ -74,10 +91,11 @@ def create_app() -> FastAPI:
             redoc_url="/redoc" if settings.is_development() else None,
         )
         
+        origins = settings.get_cors_origins_list()
         # Configure CORS middleware
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=settings.CORS_ORIGINS,
+            allow_origins=origins,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
@@ -216,6 +234,27 @@ def register_middleware(app: FastAPI):
 # Create the application instance
 app = create_app()
 
+# Add these to your main.py
+@app.get("/test/async-openai")
+async def test_async_openai():
+    """Test if AsyncOpenAI is working."""
+    from app.services.chat_service import initialize_async_openai_client
+    
+    if await initialize_async_openai_client():
+        return {"status": "success", "message": "AsyncOpenAI client initialized"}
+    else:
+        return {"status": "error", "message": "AsyncOpenAI client failed to initialize"}
+
+@app.get("/test/chat")
+async def test_chat():
+    """Test the chat functionality."""
+    from app.services.chat_service import ChatService
+    
+    try:
+        response = await ChatService.process_message("Hello, how are you?", "test", "en")
+        return {"status": "success", "response": response}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 # Direct endpoint handlers with improved error handling
 @app.post("/api/send_message")
 async def send_message_direct(request: ChatRequest):
@@ -296,6 +335,16 @@ async def chat_message_direct(request: ChatRequest):
 async def chat_start_direct(request: StartConversationRequest):
     """Legacy endpoint for starting chat."""
     return await start_conversation_direct(request)
+
+@app.get("/test")
+async def test_endpoint():
+    """Simple test endpoint to verify backend is working."""
+    return {"message": "Backend is working!", "timestamp": time.time()}
+
+@app.options("/api/{rest_of_path:path}")
+async def preflight_handler():
+    """Handle OPTIONS requests for CORS preflight."""
+    return JSONResponse(status_code=200)
 
 @app.get("/")
 async def root():
