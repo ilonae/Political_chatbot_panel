@@ -1,22 +1,29 @@
-# fly.toml app configuration file generated for political-ai-chatbot-interaction on 2025-09-18T17:47:26+02:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
-app = 'political-ai-chatbot-interaction'
-primary_region = 'fra'
+app = "my-chatbot-app"  # <- your Fly app name
+kill_signal = "SIGINT"
+kill_timeout = 5
+processes = []
 
 [build]
+  dockerfile = "./Dockerfile.fly"
 
-[http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+[env]
+  ENVIRONMENT = "production"
+  API_PORT = "8000"
+  REACT_APP_API_URL = "https://my-chatbot-app.fly.dev"
 
-[[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
+[[services]]
+  internal_port = 80
+  protocol = "tcp"
+
+  [[services.ports]]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls"]
+    port = 443
+
+  [[services.tcp_checks]]
+    interval = 10000
+    timeout = 2000
+    grace_period = "10s"
+    restart_limit = 0

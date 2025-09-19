@@ -16,4 +16,9 @@ root.render(
   </React.StrictMode>
 );
 
+if (process.env.NODE_ENV === 'production') {
+  import('./serviceWorkerRegistration')
+    .then(({ register }) => register())
+    .catch(console.error);
+}
 // Register the service worker for PWA offline support
