@@ -1,6 +1,6 @@
 import { StartConversationResponse, RecommendedAnswer } from '../types/Chat';
 
-export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+export const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
 
 // Add timeout configuration
 const DEFAULT_TIMEOUT = 10000; // 10 seconds
@@ -73,7 +73,7 @@ export const generateRecommendedAnswers = async (
   language: 'en' | 'de' = 'en'
 ): Promise<{ recommended_answers: RecommendedAnswer[] }> => {
   try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/generate_recommendations`, {
+    const response = await retryableFetch(`${API_BASE_URL}/chat/generate_recommendations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -100,7 +100,7 @@ export const generateRecommendedAnswers = async (
 
 export const sendMessage = async (message: string, language: 'en' | 'de' = 'en'): Promise<any> => {
   try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/message`, {
+    const response = await retryableFetch(`${API_BASE_URL}/chat/message`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -138,7 +138,7 @@ export const sendMessage = async (message: string, language: 'en' | 'de' = 'en')
 
 export const startConversation = async (language: 'en' | 'de' = 'en'): Promise<StartConversationResponse>  => {
   try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/start`, {
+    const response = await retryableFetch(`${API_BASE_URL}/chat/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -162,7 +162,7 @@ export const startConversation = async (language: 'en' | 'de' = 'en'): Promise<S
 
 export const resetConversation = async (): Promise<void> => {
   try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/reset?session_id=default`, { 
+    const response = await retryableFetch(`${API_BASE_URL}/chat/reset?session_id=default`, { 
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -180,7 +180,7 @@ export const resetConversation = async (): Promise<void> => {
 
 export const generateSpeech = async (text: string, sender: string, language: 'en' | 'de' = 'en') => {
   try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/generate_speech`, {
+    const response = await retryableFetch(`${API_BASE_URL}/chat/generate_speech`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
 from openai import APIError, APIConnectionError, RateLimitError
 
 from app.api.endpoints import router as chat_router
@@ -78,6 +79,7 @@ async def lifespan(app: FastAPI):
             "uptime": shutdown_time - startup_time
         })
         logger.info("Shutting down Political AI Chatbot API...")
+
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application with proper error handling."""
@@ -234,7 +236,9 @@ def register_middleware(app: FastAPI):
 # Create the application instance
 app = create_app()
 
-# Add these to your main.py
+app.mount("/", StaticFiles(directory="frontend/build", html=True), name="frontend")
+
+# Test endpoints to verify functionality
 @app.get("/test/async-openai")
 async def test_async_openai():
     """Test if AsyncOpenAI is working."""
@@ -255,6 +259,7 @@ async def test_chat():
         return {"status": "success", "response": response}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+    
 # Direct endpoint handlers with improved error handling
 @app.post("/api/send_message")
 async def send_message_direct(request: ChatRequest):
