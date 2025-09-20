@@ -1,29 +1,27 @@
-app = "my-chatbot-app"  # <- your Fly app name
+app = "PoliticalAIChatbot"
+
 kill_signal = "SIGINT"
 kill_timeout = 5
 processes = []
 
-[build]
-  dockerfile = "./Dockerfile.fly"
-
 [env]
-  ENVIRONMENT = "production"
-  API_PORT = "8000"
-  REACT_APP_API_URL = "https://my-chatbot-app.fly.dev"
+ENVIRONMENT = "production"
+API_PORT = "8080"
 
-[[services]]
-  internal_port = 80
-  protocol = "tcp"
+[build]
+  dockerfile = "Dockerfile.fly"
+  context = "." 
 
-  [[services.ports]]
-    port = 80
+[experimental]
+  allowed_public_ports = [8080]
+  auto_rollback = true
 
-  [[services.ports]]
-    handlers = ["tls"]
-    port = 443
+[deploy]
+  release_command = ""
 
-  [[services.tcp_checks]]
-    interval = 10000
-    timeout = 2000
-    grace_period = "10s"
-    restart_limit = 0
+[http_service]
+  internal_port = 8080
+  force_https = true
+  [http_service.concurrency]
+    hard_limit = 25
+    soft_limit = 20
