@@ -1,0 +1,65 @@
+# Environment variables — NEVER commit these
+.env
+.env.*
+!.env.example
+!env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node / React
+node_modules/
+frontend/build/
+frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.dockerignore
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+test_audio.mp3
+*.mp3
+
+# Old/unused
+old/
+android/
+fly.toml
+.vercel/
+
+# Redundant markdown files (keep only README.md and INSTRUCTIONS.md)
+CONTRIBUTION.md
+fix_*.md
+model_download.md
+docker_*.md
+deployment_*.md
+setup_*.md
