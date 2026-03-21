@@ -1,0 +1,44 @@
+# ── Development & build artifacts ─────────────────────────────
+old/
+**/__pycache__
+**/*.py[cod]
+**/*.so
+**/venv
+**/.venv
+**/ENV
+
+# Build outputs (each service builds its own)
+frontend/build
+frontend/node_modules
+frontend/coverage
+frontend/android
+frontend/.vercel
+
+# ── Secrets & local config ─────────────────────────────────────
+**/.env
+**/.env.local
+**/.env.production.local
+**/.env.development.local
+**/.env.test.local
+# .env.docker is intentionally NOT excluded — docker-compose uses it
+
+# ── OS & editor ────────────────────────────────────────────────
+**/.DS_Store
+**/Thumbs.db
+**/.vscode
+**/.idea
+**/*.swp
+**/*.swo
+
+# ── Audio / database ───────────────────────────────────────────
+**/*.mp3
+**/*.wav
+**/*.sqlite3
+
+# ── Git / CI ───────────────────────────────────────────────────
+.git
+.github
+**/.gitignore
+
+# ── Deploy configs for other platforms ────────────────────────
+fly.toml
