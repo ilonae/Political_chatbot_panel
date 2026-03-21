@@ -1,40 +1,52 @@
+import asyncio
 import json
 import os
 import re
 import logging
 from typing import Dict, List, Literal, Optional
-import anthropic
-from anthropic import AsyncAnthropic, APIError, APIConnectionError, RateLimitError
+import httpx
 from app.core.config import settings
 from app.models.chat import RecommendedAnswer
 
 # Configure logging
 logger = logging.getLogger(__name__)
-async_anthropic_client: Optional[AsyncAnthropic] = None
+ollama_session: Optional[httpx.AsyncClient] = None
 
 
-async def initialize_async_anthropic_client():
-    """Initialize the AsyncAnthropic client with configuration from settings."""
-    global async_anthropic_client
+async def initialize_ollama_client():
+    """Initialize the Ollama async HTTP client."""
+    global ollama_session
     try:
-        config = settings.get_anthropic_config()
-        api_key = config.get('api_key')
+        config = settings.get_ollama_config()
+        ollama_host = config.get('host')
+        ollama_model = config.get('model')
 
-        if not api_key:
-            logger.error("Anthropic API key not configured in settings")
+        if not ollama_host or not ollama_model:
+            logger.error("Ollama host and model not configured in settings")
             return False
 
-        async_anthropic_client = AsyncAnthropic(
-            api_key=api_key,
+        # Test connection to Ollama
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(f"{ollama_host}/api/tags")
+                if response.status_code != 200:
+                    logger.error(f"Failed to connect to Ollama at {ollama_host}: {response.status_code}")
+                    return False
+        except Exception as e:
+            logger.error(f"Cannot reach Ollama server at {ollama_host}: {e}")
+            return False
+
+        # Create persistent async client for the session
+        ollama_session = httpx.AsyncClient(
+            base_url=ollama_host,
             timeout=config.get('timeout', 30),
-            max_retries=config.get('max_retries', 3),
         )
 
-        logger.info("AsyncAnthropic client initialized successfully")
+        logger.info(f"Ollama client initialized successfully (host: {ollama_host}, model: {ollama_model})")
         return True
 
     except Exception as e:
-        logger.error(f"Failed to initialize AsyncAnthropic client: {e}")
+        logger.error(f"Failed to initialize Ollama client: {e}")
         return False
 
 
@@ -64,11 +76,11 @@ class ChatService:
 
     @classmethod
     async def _ensure_client_initialized(cls):
-        """Ensure the Anthropic client is initialized before making API calls."""
-        global async_anthropic_client
-        if async_anthropic_client is None:
-            if not await initialize_async_anthropic_client():
-                raise ValueError("Anthropic client not available. Please check your API key configuration.")
+        """Ensure the Ollama client is initialized before making API calls."""
+        global ollama_session
+        if ollama_session is None:
+            if not await initialize_ollama_client():
+                raise ValueError("Ollama client not available. Is Ollama running on the configured host?")
         return True
 
     @classmethod
@@ -184,7 +196,7 @@ class ChatService:
         """Initialize a new session with system prompt.
 
         The system prompt is loaded from environment variables (SYS_PROMPT_ENGLISH /
-        SYS_PROMPT_GERMAN), never hard-coded here.  Store them in your .env file.
+        SYS_PROMPT_GERMAN), never hard-coded here. Store them in your .env file.
         """
         try:
             cls._session_languages[session_id] = language
@@ -200,7 +212,7 @@ class ChatService:
                     "Set SYS_PROMPT_ENGLISH / SYS_PROMPT_GERMAN in your .env file."
                 )
 
-            # Anthropic keeps the system prompt separate from the message list
+            # Store system prompt and message history
             cls._sessions[session_id] = {
                 "system": system_prompt,
                 "messages": [],  # Only user / assistant turns here
@@ -254,7 +266,7 @@ class ChatService:
 
     @classmethod
     async def _get_ai_response(cls, session_id: str, language: Literal['en', 'de'] = 'en') -> Optional[str]:
-        """Get AI response using the Anthropic Messages API."""
+        """Get AI response using Ollama's /api/generate endpoint."""
         try:
             await cls._ensure_client_initialized()
 
@@ -271,30 +283,54 @@ class ChatService:
                 f"Keep the response natural and in character."
             ).strip()
 
-            # Anthropic requires the messages list to be non-empty and start with a user turn.
-            # If we're generating the opening message, inject a hidden user prompt.
+            # Build conversation context from message history
             messages = session["messages"]
             if not messages:
+                # For opening message, use a hidden user prompt
                 messages = [{"role": "user", "content": "Please begin the conversation."}]
 
-            config = settings.get_anthropic_config()
-            model = config.get("model", "claude-haiku-4-5-20251001")
+            # Format messages as a chat history string
+            conversation_context = ""
+            for msg in messages:
+                role = "User" if msg["role"] == "user" else "Assistant"
+                conversation_context += f"{role}: {msg['content']}\n"
 
-            response = await async_anthropic_client.messages.create(
-                model=model,
-                max_tokens=1000,
-                system=system_prompt,
-                messages=messages,
-            )
+            # Get the model name from config
+            config = settings.get_ollama_config()
+            model = config.get("model", "dolphin-mistral")
 
-            if not response.content:
-                logger.error("Empty content in Anthropic response")
+            # Call Ollama's /api/generate endpoint
+            prompt = f"{system_prompt}\n\n{conversation_context}Assistant:"
+
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "temperature": 0.7,
+                "options": {
+                    "num_predict": 300,   # cap response at ~300 tokens
+                    "num_ctx": 2048,      # context window
+                },
+            }
+
+            global ollama_session
+            response = await ollama_session.post("/api/generate", json=payload)
+
+            if response.status_code != 200:
+                logger.error(f"Ollama API error: {response.status_code} - {response.text}")
                 return cls._get_fallback_response(language)
 
-            return response.content[0].text.strip()
+            response_data = response.json()
+            generated_text = response_data.get("response", "").strip()
 
-        except (APIError, APIConnectionError, RateLimitError) as e:
-            logger.error(f"Anthropic API error in _get_ai_response: {e}")
+            if not generated_text:
+                logger.error("Empty response from Ollama")
+                return cls._get_fallback_response(language)
+
+            return generated_text
+
+        except httpx.RequestError as e:
+            logger.error(f"HTTP request error in _get_ai_response: {e}")
             return cls._get_fallback_response(language)
         except Exception as e:
             logger.error(f"Unexpected error in _get_ai_response: {e}", exc_info=True)
@@ -302,7 +338,7 @@ class ChatService:
 
     @classmethod
     def _get_fallback_response(cls, language: Literal['en', 'de']) -> str:
-        """Fallback response when the Anthropic API is unavailable."""
+        """Fallback response when Ollama is unavailable."""
         if language == 'de':
             return "Ich entschuldige mich, aber ich habe derzeit technische Schwierigkeiten. Bitte versuchen Sie es später erneut."
         return "I apologize, but I'm experiencing technical difficulties. Please try again shortly."
@@ -316,7 +352,7 @@ class ChatService:
         is_opening: bool = False,
         num_recommendations: int = 3,
     ) -> List[RecommendedAnswer]:
-        """Generate recommended follow-up questions using the Anthropic API."""
+        """Generate recommended follow-up questions using Ollama."""
         try:
             await cls._ensure_client_initialized()
 
@@ -353,22 +389,45 @@ class ChatService:
 
             prompt_type = 'opening' if is_opening else 'followup'
             prompt = templates[language][prompt_type]
-            config = settings.get_anthropic_config()
-            model = config.get("model", "claude-haiku-4-5-20251001")
+            config = settings.get_ollama_config()
+            model = config.get("model", "dolphin-mistral")
 
-            response = await async_anthropic_client.messages.create(
-                model=model,
-                max_tokens=200,
-                system=f"You generate political debate questions. Respond ONLY with a JSON array of strings in {language.upper()}.",
-                messages=[{"role": "user", "content": prompt}],
-            )
+            system_instruction = f"You generate political debate questions. Respond ONLY with a JSON array of strings in {language.upper()}."
 
-            if not response.content:
+            payload = {
+                "model": model,
+                "prompt": f"{system_instruction}\n\n{prompt}",
+                "stream": False,
+                "temperature": 0.7,
+                "options": {
+                    "num_predict": 150,   # just a short JSON array needed
+                    "num_ctx": 1024,
+                },
+            }
+
+            global ollama_session
+            # Use a shorter timeout for recommendations — fall back gracefully if slow
+            try:
+                response = await asyncio.wait_for(
+                    ollama_session.post("/api/generate", json=payload),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Recommendations timed out — using fallback")
+                return cls._get_fallback_recommendations(language, num_recommendations)
+
+            if response.status_code != 200:
+                logger.warning(f"Ollama error generating recommendations: {response.status_code}")
+                return cls._get_fallback_recommendations(language, num_recommendations)
+
+            response_data = response.json()
+            response_text = response_data.get("response", "").strip()
+
+            if not response_text:
                 logger.warning("Empty content in recommendations response")
                 return cls._get_fallback_recommendations(language, num_recommendations)
 
-            response_text = response.content[0].text.strip()
-
+            # Try to extract JSON from response
             json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
             if json_match:
                 recommendations = json.loads(json_match.group())
@@ -395,8 +454,8 @@ class ChatService:
             logger.info(f"Generated {len(valid_recommendations)} recommendations")
             return [RecommendedAnswer(text=rec, id=f"rec_{i}") for i, rec in enumerate(valid_recommendations)]
 
-        except (APIError, APIConnectionError, RateLimitError) as e:
-            logger.error(f"Anthropic API error in _get_recommended_answers: {e}")
+        except httpx.RequestError as e:
+            logger.error(f"HTTP request error in _get_recommended_answers: {e}")
             return cls._get_fallback_recommendations(language, num_recommendations)
         except Exception as e:
             logger.error(f"Unexpected error in _get_recommended_answers: {e}", exc_info=True)
@@ -435,16 +494,96 @@ class ChatService:
             return [RecommendedAnswer(text=ultimate[0], id="ultimate_fallback")]
 
 
+    @classmethod
+    async def stream_message(cls, message: str, session_id: str = "default", language: Literal['en', 'de'] = 'en'):
+        """Stream AI response tokens as Server-Sent Events."""
+        import json as _json
+
+        await cls._ensure_client_initialized()
+
+        if language:
+            cls._session_languages[session_id] = language
+
+        if session_id not in cls._sessions:
+            await cls._initialize_session(session_id, language)
+
+        cls._add_to_history(session_id, "user", message)
+
+        session = cls._sessions[session_id]
+        system_prompt = (
+            f"{session['system']}\n\n"
+            f"Respond in {'German' if language == 'de' else 'English'} only. "
+            f"Keep the response natural and in character."
+        ).strip()
+
+        messages = session["messages"]
+        conversation_context = ""
+        for msg in messages:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            conversation_context += f"{role}: {msg['content']}\n"
+
+        config = settings.get_ollama_config()
+        model = config.get("model", "dolphin-mistral")
+        prompt = f"{system_prompt}\n\n{conversation_context}Assistant:"
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": True,
+            "temperature": 0.7,
+            "options": {"num_predict": 300, "num_ctx": 2048},
+        }
+
+        full_response = ""
+
+        try:
+            global ollama_session
+            async with ollama_session.stream("POST", "/api/generate", json=payload) as resp:
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+
+                    token = chunk.get("response", "")
+                    done = chunk.get("done", False)
+
+                    if token:
+                        full_response += token
+                        yield f"data: {_json.dumps({'token': token})}\n\n"
+
+                    if done:
+                        break
+
+            # Save completed response to history
+            if full_response:
+                cls._add_to_history(session_id, "assistant", full_response)
+
+            # Generate recommended answers in background (fire-and-forget for speed)
+            recommended = await cls._get_recommended_answers(message, session_id, language)
+            rec_data = [{"text": r.text, "id": r.id} for r in recommended]
+            topic = get_translated_topic("Current Debate Topic", language)
+            yield f"data: {_json.dumps({'done': True, 'recommended_answers': rec_data, 'topic': topic})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming error: {e}", exc_info=True)
+            fallback = cls._get_fallback_response(language)
+            yield f"data: {_json.dumps({'token': fallback})}\n\n"
+            yield f"data: {_json.dumps({'done': True, 'recommended_answers': [], 'topic': ''})}\n\n"
+
+
 async def startup_event():
-    """Initialize the Anthropic client when the application starts."""
-    logger.info("Initializing AsyncAnthropic client on startup...")
-    return await initialize_async_anthropic_client()
+    """Initialize the Ollama client when the application starts."""
+    logger.info("Initializing Ollama client on startup...")
+    return await initialize_ollama_client()
 
 
 async def shutdown_event():
-    """Clean up the Anthropic client when the application shuts down."""
-    global async_anthropic_client
-    if async_anthropic_client:
-        await async_anthropic_client.__aexit__(None, None, None)
-        async_anthropic_client = None
-        logger.info("AsyncAnthropic client closed")
+    """Clean up the Ollama client when the application shuts down."""
+    global ollama_session
+    if ollama_session:
+        await ollama_session.aclose()
+        ollama_session = None
+        logger.info("Ollama client closed")

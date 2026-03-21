@@ -1,16 +1,18 @@
 import os
 import logging
-from typing import List
 from pydantic_settings import BaseSettings
 from pydantic import Field, validator, ValidationError
 from dotenv import load_dotenv
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogrm .git/index.lockger(__name__)
 
 try:
-    load_dotenv()
-    logger.info("Successfully loaded .env file")
+    # Resolve path relative to this file so it works regardless of CWD.
+    # config.py lives at backend/app/core/config.py → two levels up = backend/
+    _env_path = os.path.join(os.path.dirname(__file__), '..', '..', '.env')
+    load_dotenv(_env_path)
+    logger.info(f"Successfully loaded .env file from {_env_path}")
 except Exception as e:
     logger.warning(f"Failed to load .env file: {e}. Using system environment variables.")
 
@@ -25,10 +27,15 @@ class Settings(BaseSettings):
         description="Comma-separated list of allowed CORS origins"
     )
 
-    # Anthropic API key (replaces OPENAI_API_KEY)
-    ANTHROPIC_API_KEY: str = Field(
-        default="",
-        description="Anthropic API key for Claude models"
+    # Ollama server configuration
+    OLLAMA_HOST: str = Field(
+        default="http://localhost:11434",
+        description="URL of the local Ollama server"
+    )
+
+    OLLAMA_MODEL: str = Field(
+        default="dolphin-mistral",
+        description="Name of the Ollama model to use (e.g., dolphin-mistral, nous-hermes)"
     )
 
     # System prompts — store these in your .env file, never commit them
@@ -76,11 +83,6 @@ class Settings(BaseSettings):
         le=10
     )
 
-    # Anthropic model to use — claude-haiku is fast and cheap; swap to claude-sonnet-4-6 for higher quality
-    ANTHROPIC_MODEL: str = Field(
-        default="claude-haiku-4-5-20251001",
-        description="Anthropic model identifier"
-    )
 
     class Config:
         env_file = ".env"
@@ -88,19 +90,16 @@ class Settings(BaseSettings):
         case_sensitive = True
         extra = "ignore"  # Ignore extra environment variables
 
-    @validator("ANTHROPIC_API_KEY", pre=True, always=True)
-    def validate_api_key(cls, v):
-        """Validate Anthropic API key format."""
+    @validator("OLLAMA_HOST", pre=True, always=True)
+    def validate_ollama_host(cls, v):
+        """Validate Ollama host configuration."""
         if not v:
-            logger.warning("ANTHROPIC_API_KEY is not set")
-            return v
+            logger.warning("OLLAMA_HOST is not set, using default localhost:11434")
+            return "http://localhost:11434"
 
-        if v.startswith("your-") or "example" in v.lower():
-            logger.error(f"Invalid Anthropic API key format: {v}")
-            raise ValueError("ANTHROPIC_API_KEY appears to be a placeholder. Please set a valid key.")
-
-        if not v.startswith("sk-ant-"):
-            logger.warning(f"ANTHROPIC_API_KEY doesn't start with 'sk-ant-' prefix — double-check it is correct.")
+        if not v.startswith("http://") and not v.startswith("https://"):
+            logger.warning(f"OLLAMA_HOST should start with http:// or https:// — got {v}")
+            return f"http://{v}" if "://" not in v else v
 
         return v
 
@@ -135,9 +134,10 @@ class Settings(BaseSettings):
 
     def _post_init_validation(self):
         """Perform additional validation after initialization."""
-        if self.ENVIRONMENT == "production" and not self.ANTHROPIC_API_KEY:
-            logger.critical("Production environment requires a valid ANTHROPIC_API_KEY")
-            raise ValueError("ANTHROPIC_API_KEY is required in production environment")
+        # Note: Ollama requires a running local service, not an API key
+        if not self.OLLAMA_HOST or not self.OLLAMA_MODEL:
+            logger.critical("Ollama requires OLLAMA_HOST and OLLAMA_MODEL to be configured")
+            raise ValueError("OLLAMA_HOST and OLLAMA_MODEL are required")
 
         if self.ENVIRONMENT == "production":
             self._validate_production_cors()
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
             logger.warning("No CORS origins configured for production")
             return
 
-        for origin in origins:
+        for origin in self.get_cors_origins_list():
             if origin == "*":
                 logger.warning("Wildcard CORS origin (*) is not recommended in production")
             elif origin.startswith("http://localhost") or origin.startswith("http://127.0.0.1"):
@@ -165,25 +165,27 @@ class Settings(BaseSettings):
     def is_staging(self) -> bool:
         return self.ENVIRONMENT == "staging"
 
-    def get_anthropic_config(self) -> dict:
-        """Get Anthropic configuration."""
-        if not self.ANTHROPIC_API_KEY:
-            logger.error("Anthropic API key is not configured")
+    def get_ollama_config(self) -> dict:
+        """Get Ollama configuration."""
+        if not self.OLLAMA_HOST or not self.OLLAMA_MODEL:
+            logger.error("Ollama is not properly configured")
             return {}
 
         return {
-            "api_key": self.ANTHROPIC_API_KEY,
+            "host": self.OLLAMA_HOST,
+            "model": self.OLLAMA_MODEL,
             "timeout": self.AI_TIMEOUT,
-            "max_retries": self.AI_MAX_RETRIES,
-            "model": self.ANTHROPIC_MODEL,
         }
 
     def validate_for_usage(self) -> bool:
         """Validate that settings are properly configured for application usage."""
         errors = []
 
-        if not self.ANTHROPIC_API_KEY:
-            errors.append("ANTHROPIC_API_KEY is required")
+        if not self.OLLAMA_HOST:
+            errors.append("OLLAMA_HOST is required")
+
+        if not self.OLLAMA_MODEL:
+            errors.append("OLLAMA_MODEL is required")
 
         if self.ENVIRONMENT not in ["development", "staging", "production"]:
             errors.append(f"Invalid ENVIRONMENT: {self.ENVIRONMENT}")
@@ -199,13 +201,13 @@ class EmergencySettings:
     """Minimal settings for emergency operation when config loading fails."""
     PROJECT_NAME = "Political AI Chatbot (Emergency Mode)"
     CORS_ORIGINS = "http://localhost:3000"
-    ANTHROPIC_API_KEY = ""
+    OLLAMA_HOST = "http://localhost:11434"
+    OLLAMA_MODEL = "dolphin-mistral"
     ENVIRONMENT = "development"
     API_HOST = "0.0.0.0"
     API_PORT = 5000
     AI_TIMEOUT = 30
     AI_MAX_RETRIES = 3
-    ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
     SYS_PROMPT_GERMAN = ""
     SYS_PROMPT_ENGLISH = ""
 
@@ -215,7 +217,7 @@ class EmergencySettings:
     def is_development(self): return True
     def is_production(self): return False
     def is_staging(self): return False
-    def get_anthropic_config(self): return {}
+    def get_ollama_config(self): return {}
     def validate_for_usage(self): return False
 
 

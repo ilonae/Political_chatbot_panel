@@ -1,9 +1,13 @@
-import { ApiResponse, StartConversationResponse, RecommendedAnswer } from '../types/Chat';
+import { StartConversationResponse } from '../types/Chat';
 
-export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+// Empty string means use relative URLs (nginx proxies /api/* to backend)
+// Falls back to localhost:8000 for local dev outside Docker
+export const API_BASE_URL = process.env.REACT_APP_API_URL !== undefined
+  ? process.env.REACT_APP_API_URL
+  : 'http://localhost:8000';
 
 // Add timeout configuration
-const DEFAULT_TIMEOUT = 10000; // 10 seconds
+const DEFAULT_TIMEOUT = 120000; // 120 seconds — local LLM on CPU needs time
 
 // Enhanced fetch wrapper with timeout and error handling
 const fetchWithTimeout = async (url: string, options: RequestInit, timeout = DEFAULT_TIMEOUT): Promise<Response> => {
@@ -56,9 +60,10 @@ const retryableFetch = async (
   try {
     return await fetchWithTimeout(url, options);
   } catch (error) {
-    if (retries > 0 && 
-        (error instanceof TypeError || // Network errors
-         (error instanceof Error && error.message.includes('timeout')) ||
+    // Do not retry on timeout — LLM requests are slow, a timeout means the
+    // model is genuinely overloaded, not a transient network blip.
+    if (retries > 0 &&
+        (error instanceof TypeError ||
          (error instanceof Error && error.message.includes('Failed to fetch')))) {
       await new Promise(resolve => setTimeout(resolve, backoff));
       return retryableFetch(url, options, retries - 1, backoff * 2);
@@ -67,72 +72,59 @@ const retryableFetch = async (
   }
 };
 
-export const generateRecommendedAnswers = async (
-  userInput: string, 
-  conversationHistory: string, 
-  language: 'en' | 'de' = 'en'
-): Promise<{ recommended_answers: RecommendedAnswer[] }> => {
+/**
+ * Stream a message response token-by-token via SSE.
+ * Calls onToken for each token, then onDone with final metadata.
+ */
+export const sendMessageStream = async (
+  message: string,
+  language: 'en' | 'de' = 'en',
+  onToken: (token: string) => void,
+  onDone: (data: { recommended_answers: any[]; topic: string }) => void,
+  onError: (err: Error) => void,
+): Promise<void> => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT);
+
   try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/generate_recommendations`, {
+    const response = await fetch(`${API_BASE_URL}/api/chat/message/stream`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        user_input: userInput,
-        conversation_history: conversationHistory,
-        language,
-        session_id: 'default'  
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, language, session_id: 'default' }),
+      signal: controller.signal,
     });
 
-    if (!response.ok) {
-      return handleApiError(response, 'Failed to generate recommended answers');
+    if (!response.ok || !response.body) {
+      throw new Error(`Stream request failed: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data;
-  } catch (error) {
-    console.error('Generate recommendations error:', error);
-    throw new Error(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-}
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-export const sendMessage = async (message: string, language: 'en' | 'de' = 'en'): Promise<any> => {
-  try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/message`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        message, 
-        language,
-        session_id: 'default'  
-      }),
-    });
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    console.log('Response status:', response.status);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
 
-    if (!response.ok) {
-      return handleApiError(response, 'Failed to send message');
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.token) onToken(data.token);
+          if (data.done) onDone({ recommended_answers: data.recommended_answers ?? [], topic: data.topic ?? '' });
+        } catch {
+          // ignore malformed SSE lines
+        }
+      }
     }
-
-    const responseData = await response.json();
-    
-    return {
-      responses: [{
-        sender: 'Debate Partner',
-        message: responseData.response,
-        type: 'partner'
-      }],
-      message_count: responseData.message_count,
-      topic: responseData.topic,
-      recommended_answers: responseData.recommended_answers || []
-    };
-  } catch (error) {
-    console.error('Send message error:', error);
-    throw new Error(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  } catch (err) {
+    onError(err instanceof Error ? err : new Error('Stream failed'));
+  } finally {
+    clearTimeout(timeoutId);
   }
 };
 
@@ -178,28 +170,3 @@ export const resetConversation = async (): Promise<void> => {
   }
 };
 
-export const generateSpeech = async (text: string, sender: string, language: 'en' | 'de' = 'en') => {
-  try {
-    const response = await retryableFetch(`${API_BASE_URL}/api/chat/generate_speech`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        text, 
-        language,
-        sender
-      }),
-    });
-
-    if (!response.ok) {
-      return handleApiError(response, 'Failed to generate speech');
-    }
-    
-    const audioData = await response.arrayBuffer();
-    return { audioData };
-  } catch (error) {
-    console.error('Speech generation error:', error);
-    throw new Error(`Network error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  }
-};
