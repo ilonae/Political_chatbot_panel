@@ -1,15 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Volume2, 
-  VolumeX, 
-  RefreshCw, 
-  Send, 
+import {
+  Volume2,
+  VolumeX,
+  RefreshCw,
+  Send,
   Menu,
   Info,
-  Smartphone,
-  Tablet,
-  Monitor,
   Globe,
   AlertCircle,
   Loader2
@@ -35,8 +32,7 @@ import ThinkingIndicator from './ThinkingIndicator';
 import LanguageToggle from './LanguageToggle';
 import RecommendedAnswers from './RecommendedAnswers';
 import { Message, ChatState } from '../types/Chat';
-import { sendMessage, startConversation, resetConversation } from '../services/api';
-import VoiceSettingsPanel from './VoiceSettingsPanel';
+import { sendMessageStream, startConversation, resetConversation } from '../services/api';
 import { voiceService } from '../services/voiceService';
 import FirstInteractionPrompt from './FirstInteractionPrompt';
 
@@ -91,20 +87,17 @@ const ChatInterface: React.FC = () => {
     isGeneratingRecommendations: false
   });
   const [showFirstInteractionPrompt, setShowFirstInteractionPrompt] = useState(false);
-  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
   const [inputText, setInputText] = useState('');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
   const [hasUserInteracted, setHasUserInteracted] = useState(false);
-  const [isFirstMessagePlayed, setIsFirstMessagePlayed] = useState(false);
   const [isWaitingForInteraction, setIsWaitingForInteraction] = useState(false);
   const [errorState, setErrorState] = useState<ErrorState>({ hasError: false });
   const [isLoading, setIsLoading] = useState(false);
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const lastPlayedMessageId = useRef<string>('');
   const isInitialized = useRef(false);
   const initializationInProgress = useRef(false);
   const toast = useToast();
@@ -233,36 +226,8 @@ const ChatInterface: React.FC = () => {
     return false;
   };
 
-  const debounce = (func: Function, delay: number) => {
-    let timeoutId: NodeJS.Timeout;
-    return (...args: any[]) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => func.apply(null, args), delay);
-    };
-  };
-
-  // Handle voice playback for new messages
-  useEffect(() => {
-    const debouncedPlayMessage = debounce(async () => {
-      if (voiceEnabled && state.messages.length > 0) {
-        const lastMessage = state.messages[state.messages.length - 1];
-        if (!lastMessage || !lastMessage.message || typeof lastMessage.message !== 'string') {
-          return;
-        }
-        
-        if (lastMessage.type !== 'user' && 
-            !lastMessage.message.includes('Language switched') &&
-            !lastMessage.message.includes('Sprache auf Deutsch')) {
-          if (hasUserInteracted && lastMessage.id !== lastPlayedMessageId.current) {
-            lastPlayedMessageId.current = lastMessage.id;
-            await playMessageWithRetry(lastMessage);
-          }
-        }
-      }
-    }, 100);
-
-    debouncedPlayMessage();
-  }, [state.messages, voiceEnabled, hasUserInteracted, state.currentLanguage]);
+  // Voice playback is triggered explicitly after streaming completes (in onDone),
+  // NOT via a useEffect on state.messages — that would fire on every token.
 
   const handleEnableVoice = useCallback(() => {
     try {
@@ -405,8 +370,11 @@ const ChatInterface: React.FC = () => {
       });
 
       isInitialized.current = true;
-      
-      if (!hasUserInteracted) {
+
+      // Speak the opening message once it's fully loaded
+      if (voiceEnabled && hasUserInteracted) {
+        playMessageWithRetry(newMessage);
+      } else {
         setIsWaitingForInteraction(true);
       }
       
@@ -488,43 +456,72 @@ const ChatInterface: React.FC = () => {
 
     setInputText('');
 
-    try {
-      const response = await sendMessage(textToSend, state.currentLanguage);
-      
-      if (!response || !response.responses) {
-        throw new Error('Invalid response from server');
+    // Add a placeholder bot message that we'll fill token-by-token
+    const botMessageId = `${Date.now()}-bot`;
+    const botMessage: Message = {
+      id: botMessageId,
+      sender: 'Debate Partner',
+      message: '',
+      type: 'partner',
+      timestamp: new Date(),
+      language: state.currentLanguage,
+    };
+
+    setState(prev => ({
+      ...prev,
+      messages: [...prev.messages, botMessage],
+    }));
+
+    await sendMessageStream(
+      textToSend,
+      state.currentLanguage,
+      // onToken — append each token to the placeholder message
+      (token) => {
+        setState(prev => ({
+          ...prev,
+          messages: prev.messages.map(m =>
+            m.id === botMessageId ? { ...m, message: m.message + token } : m
+          ),
+        }));
+      },
+      // onDone — full response is ready: stop thinking, update state, then speak
+      ({ recommended_answers, topic }) => {
+        setState(prev => {
+          // Find the completed bot message to speak it
+          const completedMessage = prev.messages.find(m => m.id === botMessageId);
+          if (voiceEnabled && hasUserInteracted && completedMessage?.message) {
+            playMessageWithRetry(completedMessage);
+          }
+          return {
+            ...prev,
+            isThinking: false,
+            recommendedAnswers: recommended_answers || [],
+            currentTopic: topic || prev.currentTopic,
+          };
+        });
+      },
+      // onError
+      (error) => {
+        console.error('Failed to send message:', error);
+        setState(prev => ({
+          ...prev,
+          isThinking: false,
+          // Replace the empty placeholder with an error note
+          messages: prev.messages.map(m =>
+            m.id === botMessageId
+              ? { ...m, message: state.currentLanguage === 'de'
+                  ? 'Entschuldigung, ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.'
+                  : 'Sorry, something went wrong. Please try again.' }
+              : m
+          ),
+        }));
+        toast?.toast({
+          title: 'Message failed',
+          description: 'Could not send your message. Please try again.',
+          variant: 'destructive',
+        });
       }
-
-      const botResponses: Message[] = response.responses.map((res: any, index: number) => ({
-        id: `${Date.now()}-${index}`,
-        sender: res.sender || 'Debate Partner',
-        message: res.message || '',
-        type: res.type || 'partner',
-        timestamp: new Date(),
-        language: state.currentLanguage
-      }));
-
-      // Validate all bot responses
-      const validResponses = botResponses.filter(validateMessage);
-
-      setState(prev => ({
-        ...prev,
-        messages: [...prev.messages, ...validResponses],
-        messageCount: response.message_count || prev.messageCount,
-        currentTopic: response.topic || prev.currentTopic,
-        isThinking: false,
-        recommendedAnswers: response.recommended_answers || []
-      }));
-
-    } catch (error) {
-      console.error('Failed to send message:', error);
-      setState(prev => ({ ...prev, isThinking: false }));
-      toast?.toast({
-        title: 'Message failed',
-        description: 'Could not send your message. Please try again.',
-        variant: 'destructive'
-      });
-    }
+    );
   };
 
   const handleRecommendedAnswerSelect = (answer: string) => {
@@ -539,6 +536,9 @@ const ChatInterface: React.FC = () => {
     setState(prev => ({ ...prev, isThinking: true, isGeneratingRecommendations: true }));
     try {
       await resetConversation();
+      // Reset the guard flags so initializeConversation actually runs again
+      isInitialized.current = false;
+      initializationInProgress.current = false;
       initializeConversation();
     } catch (error) {
       console.error('Failed to reset conversation:', error);
@@ -612,9 +612,6 @@ const ChatInterface: React.FC = () => {
                     </SheetHeader>
                     <div className="grid gap-4 py-4">
                       <div className="flex items-center gap-2">
-                        {isMobile && <Smartphone className="h-4 w-4" />}
-                        {isTablet && <Tablet className="h-4 w-4" />}
-                        {!isMobile && !isTablet && <Monitor className="h-4 w-4" />}
                         <span className="text-sm text-muted-foreground">
                           {getTranslatedText(
                             isMobile ? 'Mobile view' : isTablet ? 'Tablet view' : 'Desktop view',
@@ -790,13 +787,6 @@ const ChatInterface: React.FC = () => {
                 </form>
               </div>
             </main>
-
-            {/* Voice Settings Panel */}
-            <VoiceSettingsPanel
-              isOpen={isVoiceSettingsOpen}
-              onClose={() => setIsVoiceSettingsOpen(false)}
-              currentLanguage={state.currentLanguage}
-            />
 
             {/* First Interaction Prompt */}
             <FirstInteractionPrompt
