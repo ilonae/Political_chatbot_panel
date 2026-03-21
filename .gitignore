@@ -1,10 +1,4 @@
-# Environment variables — NEVER commit these
-.env
-.env.*
-!.env.example
-!env.example
-
-# Python
+# ── Python ─────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -14,52 +8,44 @@ venv/
 .venv/
 env/
 ENV/
-*.egg-info/
-dist/
-build/
-*.egg
 
-# Node / React
-node_modules/
+# ── Node / React ───────────────────────────────────────────────
+frontend/node_modules/
+frontend/coverage/
 frontend/build/
-frontend/dist/
+frontend/android/
+frontend/.vercel/
+frontend/.gitignore
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Docker
-.dockerignore
+# ── Secrets & local config ─────────────────────────────────────
+.env
+.env.local
+.env.docker
+.env.production.local
+.env.development.local
+.env.test.local
+backend/.env
+backend/.env.local
 
-# macOS
+
+# ── Audio / database ───────────────────────────────────────────
+*.mp3
+*.wav
+*.sqlite3
+
+# ── OS & editor ────────────────────────────────────────────────
 .DS_Store
-.AppleDouble
-.LSOverride
 Thumbs.db
-
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# Logs
-*.log
-logs/
-
-# Test artifacts
-test_audio.mp3
-*.mp3
-
-# Old/unused
-old/
-android/
+# ── Obsolete deployment configs ────────────────────────────────
 fly.toml
-.vercel/
+old/
+requirements.txt
 
-# Redundant markdown files (keep only README.md and INSTRUCTIONS.md)
-CONTRIBUTION.md
-fix_*.md
-model_download.md
-docker_*.md
-deployment_*.md
-setup_*.md
