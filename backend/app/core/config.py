@@ -5,7 +5,7 @@ from pydantic import Field, validator, ValidationError
 from dotenv import load_dotenv
 
 
-logger = logging.getLogrm .git/index.lockger(__name__)
+logger = logging.getLogger(__name__)
 
 try:
     # Resolve path relative to this file so it works regardless of CWD.
