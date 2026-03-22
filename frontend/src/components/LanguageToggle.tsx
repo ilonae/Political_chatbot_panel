@@ -1,56 +1,36 @@
-import React from 'react';
-import { Button } from './ui/button';
-import { cn } from '../lib/utils';
-
-interface LanguageToggleProps {
+interface Props {
   currentLanguage: 'en' | 'de';
-  onLanguageChange: (language: 'en' | 'de') => void;
+  onLanguageChange: (lang: 'en' | 'de') => void;
   isMobile?: boolean;
   isTablet?: boolean;
 }
 
-const LanguageToggle: React.FC<LanguageToggleProps> = ({
-  currentLanguage,
-  onLanguageChange,
-  isMobile = false,
-  isTablet = false
-}) => {
+export default function LanguageToggle({ currentLanguage, onLanguageChange }: Props) {
   return (
-    <div className={cn(
-      "flex items-center gap-2 bg-gray-100 rounded-full p-1",
-      isMobile ? "h-8" : isTablet ? "h-10" : "h-9"
-    )}>
-      <Button
-        variant="ghost"
-        size={isTablet ? "lg" : "sm"}
-        className={cn(
-          "rounded-full font-medium transition-all",
-          currentLanguage === 'en' 
-            ? "bg-blue-500 text-white shadow-md" 
-            : "text-gray-600 hover:text-gray-800",
-          isMobile ? "px-3 text-xs" : isTablet ? "px-4 text-base" : "px-3 text-sm"
-        )}
-        onClick={() => onLanguageChange('en')}
-      >
-        EN
-      </Button>
-      
-      <Button
-        variant="ghost"
-        size={isTablet ? "lg" : "sm"}
-        className={cn(
-          "rounded-full font-medium transition-all",
-          currentLanguage === 'de' 
-            ? "bg-blue-500 text-white shadow-md" 
-            : "text-gray-600 hover:text-gray-800",
-          isMobile ? "px-3 text-xs" : isTablet ? "px-4 text-base" : "px-3 text-sm"
-        )}
-        onClick={() => onLanguageChange('de')}
-      >
-        DE
-      </Button>
+    <div
+      className="flex items-center rounded-lg p-0.5 gap-0.5"
+      style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)' }}
+    >
+      {(['en', 'de'] as const).map(lang => (
+        <button
+          key={lang}
+          onClick={() => onLanguageChange(lang)}
+          className="px-2.5 py-1 rounded-md text-fluid-xs font-semibold tracking-wide transition-all"
+          style={{
+            background: currentLanguage === lang
+              ? 'rgba(99,130,255,0.18)'
+              : 'transparent',
+            color: currentLanguage === lang
+              ? 'var(--accent)'
+              : 'var(--text-muted)',
+            border: currentLanguage === lang
+              ? '1px solid rgba(99,130,255,0.3)'
+              : '1px solid transparent',
+          }}
+        >
+          {lang.toUpperCase()}
+        </button>
+      ))}
     </div>
   );
-};
-
-export default LanguageToggle;
+}

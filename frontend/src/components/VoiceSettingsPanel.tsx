@@ -1,6 +1,3 @@
-// VoiceSettingsPanel is currently unused — TTS is handled by the browser
-// Web Speech API directly via voiceService. This stub exists to satisfy
-// any future imports without breaking the build.
-
+// Stub — replaced by inline controls in ChatInterface header
 const VoiceSettingsPanel = () => null;
 export default VoiceSettingsPanel;
