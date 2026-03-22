@@ -1,842 +1,320 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Volume2,
-  VolumeX,
-  RefreshCw,
-  Send,
-  Menu,
-  Info,
-  Globe,
-  AlertCircle,
-  Loader2
-} from 'lucide-react';
-
-import { cn } from '../lib/utils';
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Loader2, RefreshCw, Send, Volume2, VolumeX, WifiOff } from 'lucide-react';
+import { useChatStore } from '../store/chatStore';
+import { useChatActions } from '../hooks/useChatActions';
+import { useBackendHealth } from '../hooks/useBackendHealth';
+import { voiceService } from '../services/voiceService';
 import { getTranslatedText } from '../lib/language';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
-import { ToastProvider, useToast } from './ui/toast';
-import { 
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from './ui/sheet';
-
+import { cn } from '../lib/utils';
 import ChatBubble from './ChatBubble';
 import ThinkingIndicator from './ThinkingIndicator';
 import LanguageToggle from './LanguageToggle';
 import RecommendedAnswers from './RecommendedAnswers';
-import { Message, ChatState } from '../types/Chat';
-import { sendMessageStream, startConversation, resetConversation } from '../services/api';
-import { voiceService } from '../services/voiceService';
 import FirstInteractionPrompt from './FirstInteractionPrompt';
 
-interface ErrorState {
-  hasError: boolean;
-  errorMessage?: string;
-  errorType?: 'network' | 'api' | 'voice' | 'validation' | 'unknown';
-}
-
-class ErrorBoundary extends React.Component<{ children: React.ReactNode }, ErrorState> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError(): ErrorState {
-    return { hasError: true, errorMessage: 'Something went wrong' };
-  }
-
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error('ChatInterface error:', error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="flex items-center justify-center h-screen bg-red-50">
-          <div className="text-center p-6 bg-white rounded-lg shadow-lg">
-            <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-            <h2 className="text-xl font-semibold text-red-800 mb-2">Something went wrong</h2>
-            <p className="text-gray-600 mb-4">Please refresh the page to continue the conversation.</p>
-            <Button onClick={() => window.location.reload()} variant="destructive">
-              Refresh Page
-            </Button>
-          </div>
-        </div>
-      );
-    }
-
-    return this.props.children;
-  }
-}
-
-const ChatInterface: React.FC = () => {
-  const [state, setState] = useState<ChatState>({
-    messages: [],
-    isThinking: false,
-    currentTopic: 'Political ideologies and perspectives',
-    messageCount: 0,
-    currentLanguage: 'en',
-    recommendedAnswers: [],
-    isGeneratingRecommendations: false
-  });
-  const [showFirstInteractionPrompt, setShowFirstInteractionPrompt] = useState(false);
+export default function ChatInterface() {
+  const store = useChatStore();
+  const { initializeConversation, sendMessage, resetChat } = useChatActions();
+  const backendStatus = useBackendHealth();
   const [inputText, setInputText] = useState('');
-  const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [isMobile, setIsMobile] = useState(false);
-  const [isTablet, setIsTablet] = useState(false);
-  const [hasUserInteracted, setHasUserInteracted] = useState(false);
-  const [isWaitingForInteraction, setIsWaitingForInteraction] = useState(false);
-  const [errorState, setErrorState] = useState<ErrorState>({ hasError: false });
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const isInitialized = useRef(false);
-  const initializationInProgress = useRef(false);
-  const toast = useToast();
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Safe screen size detection
-  const checkScreenSize = useCallback(() => {
-    try {
-      const width = window.innerWidth;
-      setIsMobile(width < 768);
-      setIsTablet(width >= 768 && width < 1024);
-    } catch (error) {
-      console.error('Error checking screen size:', error);
-      setIsMobile(false);
-      setIsTablet(false);
+  useEffect(() => {
+    if (localStorage.getItem('userHasInteracted')) {
+      store.setUserInteracted();
+      voiceService.setUserInteracted();
     }
+    initializeConversation();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Safe localStorage access
-  const safeLocalStorage = {
-    getItem: (key: string): string | null => {
-      try {
-        return localStorage.getItem(key);
-      } catch (error) {
-        console.warn('localStorage access failed:', error);
-        return null;
-      }
-    },
-    setItem: (key: string, value: string): boolean => {
-      try {
-        localStorage.setItem(key, value);
-        return true;
-      } catch (error) {
-        console.warn('localStorage set failed:', error);
-        return false;
-      }
-    }
-  };
-
-  // Check if user has interacted and set up voice service
   useEffect(() => {
-    try {
-      checkScreenSize();
-      window.addEventListener('resize', checkScreenSize);
-      
-      const storedInteraction = safeLocalStorage.getItem('userHasInteracted');
-      if (storedInteraction) {
-        setHasUserInteracted(true);
-        voiceService.setUserInteracted();
-      } else {
-        setShowFirstInteractionPrompt(true);
-      }
-      
-      return () => {
-        window.removeEventListener('resize', checkScreenSize);
-        voiceService.stop();
-      };
-    } catch (error) {
-      console.error('Error in initial setup:', error);
-      setErrorState({ 
-        hasError: true, 
-        errorMessage: 'Failed to initialize chat', 
-        errorType: 'unknown' 
-      });
-    }
-  }, [checkScreenSize]);
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [store.messages]);
 
-  const handleDismissPrompt = () => {
-    setShowFirstInteractionPrompt(false);
-    setHasUserInteracted(true);
-    safeLocalStorage.setItem('userHasInteracted', 'true');
+  useEffect(() => {
+    if (store.hasUserInteracted) return;
+    const handler = () => enableVoice();
+    const events = ['click', 'keydown', 'touchstart'] as const;
+    events.forEach(e => document.addEventListener(e, handler, { once: true }));
+    return () => events.forEach(e => document.removeEventListener(e, handler));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.hasUserInteracted]);
+
+  const enableVoice = () => {
+    store.setUserInteracted();
     voiceService.setUserInteracted();
+    localStorage.setItem('userHasInteracted', 'true');
   };
 
-  const isDuplicateMessage = (newMessage: Message, existingMessages: Message[]): boolean => {
-    try {
-      return existingMessages.some(msg => 
-        msg.message === newMessage.message && 
-        msg.sender === newMessage.sender &&
-        Math.abs(msg.timestamp.getTime() - newMessage.timestamp.getTime()) < 5000
-      );
-    } catch (error) {
-      console.warn('Error checking for duplicate messages:', error);
-      return false;
-    }
-  };
-
-  const playMessageWithRetry = async (message: Message, retries = 2): Promise<boolean> => {
-    if (!message || !message.message || typeof message.message !== 'string') {
-      console.warn('Invalid message format for voice playback:', message);
-      return false;
-    }
-
-    if (message.type !== 'partner' || 
-        message.message.includes('Language switched') ||
-        message.message.includes('Sprache auf Deutsch')) {
-      return false;
-    }
-
-    // Stop any currently playing audio before starting new one
-    try {
-      voiceService.stop();
-    } catch (error) {
-      console.warn('Error stopping previous audio:', error);
-    }
-
-    for (let i = 0; i < retries; i++) {
-      try {
-        if (voiceService.hasUserInteracted && voiceService.hasUserInteracted()) {
-          await voiceService.speakText(message.message, message.sender, message.language);
-          return true;
-        }
-        break;
-      } catch (error) {
-        console.error(`Voice playback attempt ${i + 1} failed:`, error);
-        if (i === retries - 1) {
-          toast?.toast({
-            title: 'Voice playback failed',
-            description: 'Could not play the message audio',
-            variant: 'destructive'
-          });
-          return false;
-        }
-        await new Promise(resolve => setTimeout(resolve, 300 * (i + 1)));
-      }
-    }
-    return false;
-  };
-
-  // Voice playback is triggered explicitly after streaming completes (in onDone),
-  // NOT via a useEffect on state.messages — that would fire on every token.
-
-  const handleEnableVoice = useCallback(() => {
-    try {
-      setHasUserInteracted(true);
-      voiceService.setUserInteracted();
-      safeLocalStorage.setItem('userHasInteracted', 'true');
-      setIsWaitingForInteraction(false);
-
-      const unplayedMessages = state.messages.filter(msg => 
-        msg.type === 'partner' && 
-        !msg.message.includes('Language switched') &&
-        !msg.message.includes('Sprache auf Deutsch')
-      );
-      
-      if (unplayedMessages.length > 0) {
-        unplayedMessages.forEach((message, index) => {
-          setTimeout(() => {
-            voiceService.speakText(
-              message.message, 
-              message.sender, 
-              message.language as 'en' | 'de'
-            ).catch(error => {
-              console.error('Failed to play message:', error);
-            });
-          }, index * 2000);
-        });
-      }
-    } catch (error) {
-      console.error('Error enabling voice:', error);
-      toast?.toast({
-        title: 'Voice activation failed',
-        description: 'Could not enable voice features',
-        variant: 'destructive'
-      });
-    }
-  }, [state.messages, toast]);
-
-  // Set up user interaction detection for voice service
-  useEffect(() => {
-    const handleUserInteraction = () => {
-      if (!hasUserInteracted) {
-        try {
-          voiceService.setUserInteracted();
-          setHasUserInteracted(true);
-          safeLocalStorage.setItem('userHasInteracted', 'true');
-        } catch (error) {
-          console.error('Error handling user interaction:', error);
-        }
-      }
-    };
-
-    if (!hasUserInteracted) {
-      const events = ['click', 'keydown', 'touchstart', 'mousedown'];
-      
-      events.forEach(event => {
-        document.addEventListener(event, handleUserInteraction, { once: true });
-      });
-
-      return () => {
-        events.forEach(event => {
-          document.removeEventListener(event, handleUserInteraction);
-        });
-      };
-    }
-  }, [hasUserInteracted]);
-
-  const scrollToBottom = () => {
-    try {
-      messagesEndRef.current?.scrollIntoView({ 
-        behavior: 'smooth'
-      });
-    } catch (error) {
-      console.warn('Error scrolling to bottom:', error);
-    }
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [state.messages]);
-
-  const validateMessage = (message: Message): boolean => {
-    try {
-      return (
-        message &&
-        typeof message.id === 'string' &&
-        typeof message.sender === 'string' &&
-        typeof message.message === 'string' &&
-        typeof message.type === 'string' &&
-        message.timestamp instanceof Date &&
-        !isNaN(message.timestamp.getTime())
-      );
-    } catch (error) {
-      console.error('Message validation failed:', error);
-      return false;
-    }
-  };
-
-  const initializeConversation = async () => {
-    if (initializationInProgress.current || isInitialized.current) {
-      return;
-    }
-
-    initializationInProgress.current = true;
-    setIsLoading(true);
-    setState(prev => ({ ...prev, isThinking: true, isGeneratingRecommendations: true }));
-    
-    try {
-      const response = await startConversation(state.currentLanguage);
-      
-      if (!response || !response.opening_message) {
-        throw new Error('Invalid response from server');
-      }
-
-      const newMessage: Message = {
-        id: Date.now().toString(),
-        sender: 'Debate Partner',
-        message: response.opening_message,
-        type: 'partner',
-        timestamp: new Date(),
-        language: state.currentLanguage
-      };
-
-      if (!validateMessage(newMessage)) {
-        throw new Error('Invalid message format received');
-      }
-
-      setState(prev => {
-        const filteredMessages = prev.messages.filter(msg => 
-          !isDuplicateMessage(newMessage, prev.messages)
-        );
-        return {
-          ...prev,
-          messages: [...filteredMessages, newMessage],
-          messageCount: response.message_count || 0,
-          currentTopic: response.topic || 'Political ideologies and perspectives',
-          isThinking: false,
-          recommendedAnswers: response.recommended_answers || [],
-          isGeneratingRecommendations: false
-        };
-      });
-
-      isInitialized.current = true;
-
-      // Speak the opening message once it's fully loaded
-      if (voiceEnabled && hasUserInteracted) {
-        playMessageWithRetry(newMessage);
-      } else {
-        setIsWaitingForInteraction(true);
-      }
-      
-    } catch (error) {
-      console.error('Failed to start conversation:', error);
-      setErrorState({ 
-        hasError: true, 
-        errorMessage: 'Failed to start conversation', 
-        errorType: 'api' 
-      });
-      toast?.toast({
-        title: 'Connection Error',
-        description: 'Could not start the conversation. Please try again.',
-        variant: 'destructive'
-      });
-    } finally {
-      initializationInProgress.current = false;
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!isInitialized.current) {
-      initializeConversation();
-    }
-  }, []);
-
-  const handleLanguageChange = (newLanguage: "en" | "de") => {
-    try {
-      setState((prev) => ({
-        ...prev,
-        currentLanguage: newLanguage,
-      }));
-    } catch (error) {
-      console.error('Error changing language:', error);
-      toast?.toast({
-        title: 'Language change failed',
-        description: 'Could not switch language',
-        variant: 'destructive'
-      });
-    }
-  };
-
-  const handleSendMessage = async (messageText?: string) => {
-    const textToSend = messageText || inputText.trim();
-    
-    if (!textToSend || state.isThinking) return;
-    
-    if (!hasUserInteracted) {
-      setHasUserInteracted(true);
-      voiceService.setUserInteracted();
-      safeLocalStorage.setItem('userHasInteracted', 'true');
-    }
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      sender: 'You',
-      message: textToSend,
-      type: 'user',
-      timestamp: new Date(),
-      language: state.currentLanguage
-    };
-
-    if (!validateMessage(userMessage)) {
-      toast?.toast({
-        title: 'Invalid message',
-        description: 'Please enter a valid message',
-        variant: 'destructive'
-      });
-      return;
-    }
-
-    setState(prev => ({
-      ...prev,
-      messages: [...prev.messages, userMessage],
-      isThinking: true,
-      recommendedAnswers: []
-    }));
-
+  const handleSubmit = (text?: string) => {
+    const msg = text ?? inputText.trim();
+    if (!msg) return;
     setInputText('');
-
-    // Add a placeholder bot message that we'll fill token-by-token
-    const botMessageId = `${Date.now()}-bot`;
-    const botMessage: Message = {
-      id: botMessageId,
-      sender: 'Debate Partner',
-      message: '',
-      type: 'partner',
-      timestamp: new Date(),
-      language: state.currentLanguage,
-    };
-
-    setState(prev => ({
-      ...prev,
-      messages: [...prev.messages, botMessage],
-    }));
-
-    await sendMessageStream(
-      textToSend,
-      state.currentLanguage,
-      // onToken — append each token to the placeholder message
-      (token) => {
-        setState(prev => ({
-          ...prev,
-          messages: prev.messages.map(m =>
-            m.id === botMessageId ? { ...m, message: m.message + token } : m
-          ),
-        }));
-      },
-      // onDone — full response is ready: stop thinking, update state, then speak
-      ({ recommended_answers, topic }) => {
-        setState(prev => {
-          // Find the completed bot message to speak it
-          const completedMessage = prev.messages.find(m => m.id === botMessageId);
-          if (voiceEnabled && hasUserInteracted && completedMessage?.message) {
-            playMessageWithRetry(completedMessage);
-          }
-          return {
-            ...prev,
-            isThinking: false,
-            recommendedAnswers: recommended_answers || [],
-            currentTopic: topic || prev.currentTopic,
-          };
-        });
-      },
-      // onError
-      (error) => {
-        console.error('Failed to send message:', error);
-        setState(prev => ({
-          ...prev,
-          isThinking: false,
-          // Replace the empty placeholder with an error note
-          messages: prev.messages.map(m =>
-            m.id === botMessageId
-              ? { ...m, message: state.currentLanguage === 'de'
-                  ? 'Entschuldigung, ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.'
-                  : 'Sorry, something went wrong. Please try again.' }
-              : m
-          ),
-        }));
-        toast?.toast({
-          title: 'Message failed',
-          description: 'Could not send your message. Please try again.',
-          variant: 'destructive',
-        });
-      }
-    );
+    sendMessage(msg);
+    inputRef.current?.focus();
   };
 
-  const handleRecommendedAnswerSelect = (answer: string) => {
-    try {
-      handleSendMessage(answer);
-    } catch (error) {
-      console.error('Error selecting recommended answer:', error);
-    }
-  };
-
-  const handleReset = async () => {
-    setState(prev => ({ ...prev, isThinking: true, isGeneratingRecommendations: true }));
-    try {
-      await resetConversation();
-      // Reset the guard flags so initializeConversation actually runs again
-      isInitialized.current = false;
-      initializationInProgress.current = false;
-      initializeConversation();
-    } catch (error) {
-      console.error('Failed to reset conversation:', error);
-      toast?.toast({
-        title: 'Reset failed',
-        description: 'Could not reset the conversation',
-        variant: 'destructive'
-      });
-    }
-  };
-
-  const handleVoiceToggle = () => {
-    try {
-      setVoiceEnabled(!voiceEnabled);
-      if (!voiceEnabled && !hasUserInteracted) {
-        setHasUserInteracted(true);
-        voiceService.setUserInteracted();
-        safeLocalStorage.setItem('userHasInteracted', 'true');
-      }
-    } catch (error) {
-      console.error('Error toggling voice:', error);
-    }
-  };
-
-  if (errorState.hasError) {
+  if (store.isThinking && store.messages.length === 0) {
     return (
-      <div className="flex items-center justify-center h-screen bg-red-50">
-        <div className="text-center p-6 bg-white rounded-lg shadow-lg">
-          <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-red-800 mb-2">Something went wrong</h2>
-          <p className="text-gray-600 mb-4">{errorState.errorMessage}</p>
-          <Button onClick={() => window.location.reload()} variant="destructive">
-            Refresh Page
-          </Button>
+      <div className="flex items-center justify-center h-dvh" style={{ background: 'var(--bg)' }}>
+        <div className="flex flex-col items-center gap-3 text-center px-6">
+          <Loader2 className="w-8 h-8 animate-spin" style={{ color: 'var(--accent)' }} />
+          <p className="text-fluid-base font-medium" style={{ color: 'var(--text-secondary)' }}>
+            {store.currentLanguage === 'de' ? 'Gespräch wird gestartet…' : 'Starting conversation…'}
+          </p>
         </div>
       </div>
     );
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center">
-          <Loader2 className="h-12 w-12 animate-spin text-blue-500 mx-auto mb-4" />
-          <p className="text-lg text-gray-600">Starting conversation...</p>
-        </div>
-      </div>
-    );
-  }
+  const offline = backendStatus === 'offline';
 
   return (
-    <ErrorBoundary>
-      <TooltipProvider>
-        <ToastProvider>
-          <div className="flex flex-col h-screen bg-background">
-            {/* Header */}
-            <header className="flex items-center justify-between p-4 border-b bg-card">
-              <div className="flex items-center gap-3">
-                <Sheet>
-                  <SheetTrigger asChild>
-                    <Button variant="ghost" size="icon" className="md:hidden">
-                      <Menu className="h-5 w-5" />
-                    </Button>
-                  </SheetTrigger>
-                  <SheetContent side="left" className="w-80">
-                    <SheetHeader>
-                      <SheetTitle>{getTranslatedText('Chat Settings', state.currentLanguage)}</SheetTitle>
-                      <SheetDescription>
-                        {getTranslatedText('Configure your debate experience', state.currentLanguage)}
-                      </SheetDescription>
-                    </SheetHeader>
-                    <div className="grid gap-4 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm text-muted-foreground">
-                          {getTranslatedText(
-                            isMobile ? 'Mobile view' : isTablet ? 'Tablet view' : 'Desktop view',
-                            state.currentLanguage
-                          )}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Volume2 className="h-4 w-4" />
-                        <span className="text-sm text-muted-foreground">
-                          {state.currentLanguage === 'en' ? 'Voice' : 'Stimme'}: 
-                          <span className="font-semibold ml-1">
-                            {voiceEnabled 
-                              ? (state.currentLanguage === 'en' ? 'Enabled' : 'Aktiviert') 
-                              : (state.currentLanguage === 'en' ? 'Disabled' : 'Deaktiviert')}
-                          </span>
-                        </span>
-                      </div>
-                      {!hasUserInteracted && (
-                        <div className="flex items-center gap-2 text-amber-600">
-                          <Info className="h-4 w-4" />
-                          <span className="text-sm">
-                            {state.currentLanguage === 'en' 
-                              ? 'Click anywhere to enable voice' 
-                              : 'Klicken Sie irgendwo, um die Stimme zu aktivieren'}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  </SheetContent>
-                </Sheet>
-                <h1 className="text-xl font-semibold text-foreground">
-                  {getTranslatedText('Confronting Fascism: An AI Dialogue', state.currentLanguage)}
-                </h1>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="hidden md:flex">
-                  <span className="text-sm text-muted-foreground bg-muted px-2 py-1 rounded-md">
-                    {getTranslatedText(state.currentTopic, state.currentLanguage)}
-                  </span>
-                </div>
+    <div className="flex flex-col h-dvh" style={{ background: 'var(--bg)' }}>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="flex items-center gap-2">
-                      <Globe className="h-4 w-4 text-muted-foreground" />
-                      <LanguageToggle
-                        currentLanguage={state.currentLanguage}
-                        onLanguageChange={handleLanguageChange}
-                        isMobile={isMobile}
-                        isTablet={isTablet}
-                      />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {getTranslatedText('Switch language (EN/DE)', state.currentLanguage)}
-                  </TooltipContent>
-                </Tooltip>
+      <AnimatePresence>
+        {offline && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            className="flex items-center justify-center gap-2 px-4 py-2 text-fluid-xs font-medium overflow-hidden"
+            style={{ background: 'var(--error-bg)', borderBottom: '1px solid var(--error-border)', color: 'var(--error)' }}
+          >
+            <WifiOff className="w-3.5 h-3.5" />
+            {store.currentLanguage === 'de'
+              ? 'Backend nicht erreichbar — starte das Backend und lade neu'
+              : 'Backend unreachable — start the backend and refresh'}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={handleEnableVoice}
-                      className={!hasUserInteracted ? "bg-blue-100 animate-pulse" : ""}
-                    >
-                      {voiceEnabled ? (
-                        <Volume2 className="h-4 w-4" />
-                      ) : (
-                        <VolumeX className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {!hasUserInteracted 
-                      ? (state.currentLanguage === 'en' ? 'Click to enable voice' : 'Klicken Sie zum Aktivieren')
-                      : (state.currentLanguage === 'en' ? 'Voice enabled' : 'Stimme aktiviert')}
-                  </TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" onClick={handleReset}>
-                      <RefreshCw className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {getTranslatedText('Reset conversation', state.currentLanguage)}
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-            </header>
-
-            {/* Messages Area */}
-            <main className="flex-1 overflow-hidden flex flex-col">
-              <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                <AnimatePresence mode="popLayout">
-                  {state.messages.map((message) => (
-                    <motion.div
-                      key={message.id}
-                      layout
-                      initial={{ opacity: 0, y: 20, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: -20, scale: 0.95 }}
-                      transition={{
-                        type: "spring",
-                        stiffness: 500,
-                        damping: 30
-                      }}
-                    >
-                      <ChatBubble 
-                        message={message} 
-                        isMobile={isMobile}
-                        isTablet={isTablet}
-                        currentLanguage={state.currentLanguage}
-                      />
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-
-                {/* Recommended Answers */}
-                {state.messages.length > 0 && (
-                  <RecommendedAnswers
-                    answers={state.recommendedAnswers}
-                    onAnswerSelect={handleRecommendedAnswerSelect}
-                    isLoading={state.isGeneratingRecommendations}
-                    language={state.currentLanguage}
-                  />
-                )}
-
-                {state.isThinking && (
-                  <ThinkingIndicator 
-                    isMobile={isMobile} 
-                    isTablet={isTablet}
-                    language={state.currentLanguage}
-                  />
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Input Area */}
-              <div className="p-4 border-t bg-white">
-                <form 
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }}
-                  className="flex gap-3 items-end"
-                >
-                  <Input
-                    placeholder={getTranslatedText("Type your response...", state.currentLanguage)}
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    disabled={state.isThinking}
-                    className={cn(
-                      "flex-1",
-                      isMobile ? "text-lg" : isTablet ? "text-2xl" : "text-xl"
-                    )}
-                  />
-                  <Button
-                    type="submit"
-                    disabled={state.isThinking || !inputText.trim()}
-                    size={isTablet ? "lg" : "default"}
-                    className={cn(
-                      "rounded-2xl font-bold shadow-lg",
-                      "bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700",
-                      "disabled:from-gray-300 disabled:to-gray-400 disabled:text-gray-500"
-                    )}
-                  >
-                    <Send className={cn(isTablet ? "h-6 w-6" : "h-5 w-5")} />
-                  </Button>
-                </form>
-              </div>
-            </main>
-
-            {/* First Interaction Prompt */}
-            <FirstInteractionPrompt
-              isVisible={showFirstInteractionPrompt}
-              onDismiss={handleDismissPrompt}
-              currentLanguage={state.currentLanguage}
-            />
-
-            {/* Interaction Overlay */}
-            {!hasUserInteracted && (
-              <div 
-                className="fixed inset-0 bg-black bg-opacity-20 flex items-center justify-center z-40 cursor-pointer"
-                onClick={handleEnableVoice}
-              >
-                <div className="bg-white rounded-lg p-6 max-w-md mx-4 text-center">
-                  <Volume2 className="h-12 w-12 mx-auto mb-4 text-blue-500" />
-                  <h3 className="text-lg font-semibold mb-2">
-                    {state.currentLanguage === 'en' ? 'Enable Voice' : 'Stimme aktivieren'}
-                  </h3>
-                  {isWaitingForInteraction ? (
-                    <>
-                  <p className="text-gray-600 mb-4">
-                    {state.currentLanguage === 'en' 
-                      ? 'Click anywhere to enable voice responses' 
-                      : 'Klicken Sie irgendwo, um Sprachantworten zu aktivieren'}
-                  </p>
-                          <div className="flex items-center justify-center mb-4">
-                      <div className="animate-bounce">
-                        <Volume2 className="h-6 w-6 text-blue-500" />
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <p className="text-gray-600 mb-4">
-                    {state.currentLanguage === 'en' 
-                      ? 'Click anywhere to enable voice responses' 
-                      : 'Klicken Sie irgendwo, um Sprachantworten zu aktivieren'}
-                  </p>
-                )}
-                  <Button onClick={handleEnableVoice}>
-                    {state.currentLanguage === 'en' ? 'Enable Voice' : 'Stimme aktivieren'}
-                  </Button>
-                </div>
-              </div>
-            )}
+      <header
+        className="flex items-center justify-between px-3 sm:px-5 safe-top"
+        style={{
+          background: 'var(--bg-surface)',
+          borderBottom: '1px solid var(--border)',
+          minHeight: 'clamp(52px, 7vh, 64px)',
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <div
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+            style={{ background: 'var(--accent-glow)', border: '1px solid rgba(99,130,255,0.3)' }}
+          >
+            <span className="text-fluid-sm" role="img" aria-label="debate">⚡</span>
           </div>
-        </ToastProvider>
-      </TooltipProvider>
-    </ErrorBoundary>
-  );
-};
+          <h1 className="font-semibold truncate text-fluid-base" style={{ color: 'var(--text-primary)' }}>
+            {getTranslatedText('Confronting Fascism: An AI Dialogue', store.currentLanguage)}
+          </h1>
+  
+          {backendStatus !== 'checking' && (
+            <span
+              title={offline ? 'Backend offline' : 'Backend connected'}
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{
+                background: offline ? 'var(--error)' : '#22c55e',
+                boxShadow: offline ? '0 0 6px var(--error)' : '0 0 6px #22c55e88',
+              }}
+            />
+          )}
+        </div>
 
-export default ChatInterface;
+        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+          <LanguageToggle
+            currentLanguage={store.currentLanguage}
+            onLanguageChange={store.setLanguage}
+          />
+
+          <button
+            onClick={() => { if (!store.hasUserInteracted) enableVoice(); store.toggleVoice(); }}
+            title={store.currentLanguage === 'en' ? 'Toggle voice' : 'Stimme umschalten'}
+            className={cn(
+              'w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center',
+              !store.hasUserInteracted && 'ring-2 ring-[var(--accent)] animate-pulse'
+            )}
+            style={{
+              background: store.voiceEnabled ? 'rgba(99,130,255,0.12)' : 'transparent',
+              color: store.voiceEnabled ? 'var(--accent)' : 'var(--text-muted)',
+            }}
+          >
+            {store.voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+
+          <button
+            onClick={resetChat}
+            title={getTranslatedText('Reset conversation', store.currentLanguage)}
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center"
+            style={{ color: 'var(--text-muted)' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--text-secondary)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text-muted)')}
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+      {store.currentTopic && (
+        <div
+          className="px-3 sm:px-5 py-1.5 text-center truncate"
+          style={{
+            background: 'var(--bg-elevated)',
+            borderBottom: '1px solid var(--border)',
+            color: 'var(--text-muted)',
+            fontSize: 'var(--text-xs)',
+            letterSpacing: '0.04em',
+          }}
+        >
+          {getTranslatedText(store.currentTopic, store.currentLanguage)}
+        </div>
+      )}
+
+      <main className="flex-1 overflow-y-auto">
+        <div className="flex flex-col gap-2 sm:gap-3 px-3 sm:px-5 py-4 max-w-3xl mx-auto w-full">
+          <AnimatePresence mode="popLayout">
+            {store.messages.map(msg => (
+              <motion.div
+                key={msg.id}
+                layout
+                initial={{ opacity: 0, y: 14, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 26 }}
+              >
+                <ChatBubble message={msg} currentLanguage={store.currentLanguage} />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+
+          {store.isThinking && <ThinkingIndicator language={store.currentLanguage} />}
+
+          {store.messages.length > 0 && !store.isThinking && (
+            <RecommendedAnswers
+              answers={store.recommendedAnswers}
+              onAnswerSelect={handleSubmit}
+              isLoading={store.isGeneratingRecommendations}
+              language={store.currentLanguage}
+            />
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      </main>
+
+      <div
+        className="px-3 sm:px-5 py-3 safe-bottom"
+        style={{ background: 'var(--bg-surface)', borderTop: '1px solid var(--border)' }}
+      >
+        <form
+          onSubmit={e => { e.preventDefault(); handleSubmit(); }}
+          className="flex gap-2 items-center max-w-3xl mx-auto w-full"
+        >
+          <input
+            ref={inputRef}
+            value={inputText}
+            onChange={e => setInputText(e.target.value)}
+            disabled={store.isThinking || offline}
+            placeholder={
+              offline
+                ? (store.currentLanguage === 'de' ? 'Backend offline…' : 'Backend offline…')
+                : getTranslatedText('Type your response...', store.currentLanguage)
+            }
+            className="flex-1 rounded-xl px-4 py-2.5 text-fluid-base outline-none"
+            style={{
+              background: 'var(--bg-input)',
+              border: `1px solid ${offline ? 'var(--error-border)' : 'var(--border)'}`,
+              color: 'var(--text-primary)',
+              caretColor: 'var(--accent)',
+              opacity: offline ? 0.6 : 1,
+            }}
+            onFocus={e => { if (!offline) e.target.style.borderColor = 'rgba(99,130,255,0.4)'; }}
+            onBlur={e => { e.target.style.borderColor = offline ? 'var(--error-border)' : 'var(--border)'; }}
+          />
+          <motion.button
+            type="submit"
+            disabled={store.isThinking || !inputText.trim() || offline}
+            whileTap={{ scale: 0.93 }}
+            className="flex-shrink-0 flex items-center justify-center rounded-xl"
+            style={{
+              width: 'clamp(40px, 6vw, 44px)',
+              height: 'clamp(40px, 6vw, 44px)',
+              background: store.isThinking || !inputText.trim() || offline
+                ? 'var(--bg-elevated)'
+                : 'linear-gradient(135deg, var(--user-from), var(--user-to))',
+              boxShadow: store.isThinking || !inputText.trim() || offline
+                ? 'none'
+                : '0 4px 15px var(--user-glow)',
+              color: store.isThinking || !inputText.trim() || offline
+                ? 'var(--text-muted)'
+                : 'white',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            {store.isThinking
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Send className="w-4 h-4" />}
+          </motion.button>
+        </form>
+      </div>
+
+      <FirstInteractionPrompt
+        isVisible={store.showFirstInteractionPrompt}
+        onDismiss={() => { enableVoice(); store.dismissFirstInteractionPrompt(); }}
+        currentLanguage={store.currentLanguage}
+      />
+      <AnimatePresence>
+        {!store.hasUserInteracted && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center px-4 cursor-pointer"
+            style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(8px)' }}
+            onClick={enableVoice}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 24 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="rounded-2xl p-8 max-w-sm w-full text-center"
+              style={{
+                background: 'var(--bg-elevated)',
+                border: '1px solid rgba(99,130,255,0.2)',
+                boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div
+                className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5"
+                style={{ background: 'var(--accent-glow)', border: '1px solid rgba(99,130,255,0.25)' }}
+              >
+                <Volume2 className="w-7 h-7" style={{ color: 'var(--accent)' }} />
+              </div>
+              <h3 className="text-fluid-xl font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
+                {store.currentLanguage === 'en' ? 'Enable Voice' : 'Stimme aktivieren'}
+              </h3>
+              <p className="text-fluid-sm mb-6" style={{ color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                {store.currentLanguage === 'en'
+                  ? 'Tap to hear the debate partner respond aloud'
+                  : 'Tippen Sie, um den Diskussionspartner laut zu hören'}
+              </p>
+              <button
+                onClick={enableVoice}
+                className="w-full py-3 rounded-xl text-fluid-base font-semibold"
+                style={{
+                  background: 'linear-gradient(135deg, var(--user-from), var(--user-to))',
+                  color: 'white',
+                  boxShadow: '0 4px 20px var(--user-glow)',
+                }}
+              >
+                {store.currentLanguage === 'en' ? 'Enable Voice' : 'Stimme aktivieren'}
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
