@@ -1,15 +1,12 @@
 import { StartConversationResponse } from '../types/Chat';
 
-// Empty string means use relative URLs (nginx proxies /api/* to backend)
 // Falls back to localhost:8000 for local dev outside Docker
-export const API_BASE_URL = process.env.REACT_APP_API_URL !== undefined
-  ? process.env.REACT_APP_API_URL
+export const API_BASE_URL = import.meta.env.VITE_API_URL !== undefined
+  ? import.meta.env.VITE_API_URL
   : 'http://localhost:8000';
 
-// Add timeout configuration
 const DEFAULT_TIMEOUT = 120000; // 120 seconds — local LLM on CPU needs time
 
-// Enhanced fetch wrapper with timeout and error handling
 const fetchWithTimeout = async (url: string, options: RequestInit, timeout = DEFAULT_TIMEOUT): Promise<Response> => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -30,7 +27,6 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeout = DEF
   }
 };
 
-// Generic error handler
 const handleApiError = async (response: Response, defaultMessage: string): Promise<never> => {
   let errorDetails = '';
   
@@ -50,7 +46,6 @@ const handleApiError = async (response: Response, defaultMessage: string): Promi
   throw new Error(`${defaultMessage}: ${response.status} ${response.statusText}${errorDetails ? ` - ${errorDetails}` : ''}`);
 };
 
-// Retry mechanism for transient errors
 const retryableFetch = async (
   url: string, 
   options: RequestInit, 
@@ -60,8 +55,7 @@ const retryableFetch = async (
   try {
     return await fetchWithTimeout(url, options);
   } catch (error) {
-    // Do not retry on timeout — LLM requests are slow, a timeout means the
-    // model is genuinely overloaded, not a transient network blip.
+    // No retry on timeout — timeout means the model is genuinely overloaded, and retrying will only add more load
     if (retries > 0 &&
         (error instanceof TypeError ||
          (error instanceof Error && error.message.includes('Failed to fetch')))) {
@@ -72,10 +66,6 @@ const retryableFetch = async (
   }
 };
 
-/**
- * Stream a message response token-by-token via SSE.
- * Calls onToken for each token, then onDone with final metadata.
- */
 export const sendMessageStream = async (
   message: string,
   language: 'en' | 'de' = 'en',
@@ -117,7 +107,7 @@ export const sendMessageStream = async (
           if (data.token) onToken(data.token);
           if (data.done) onDone({ recommended_answers: data.recommended_answers ?? [], topic: data.topic ?? '' });
         } catch {
-          // ignore malformed SSE lines
+          console.warn('Failed to parse stream line:', line);
         }
       }
     }

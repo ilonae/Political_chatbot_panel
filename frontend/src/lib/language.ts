@@ -24,7 +24,14 @@ export const getTranslatedText = (text: string, language: 'en' | 'de'): string =
       en: 'Debate Partner:',
       de: 'Diskussionspartner:'
     },
-    // Add other translations as needed
+    'Reset conversation': {
+      en: 'Reset conversation',
+      de: 'Gespräch zurücksetzen',
+    },
+    'Type your response...': {
+      en: 'Type your response...',
+      de: 'Antwort eingeben…',
+    }
   };
 
   return translations[text]?.[language] || text;
