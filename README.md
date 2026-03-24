@@ -1,5 +1,8 @@
 # Political AI Chatbot
 
+[![Demo](https://img.youtube.com/vi/WwVQNzJJSXc/1.jpg)](https://www.youtube.com/watch?v=WwVQNzJJSXc) 
+[![Demo](https://img.youtube.com/vi/KZiHEbcUgYk/1.jpg)](https://www.youtube.com/watch?v=KZiHEbcUgYk)
+
 An interactive art exhibition installation that lets visitors hold a live conversation with an AI embodying a radical-right political persona. The chatbot argues with conviction, selects statistics strategically, and never hedges — confronting the visitor with how these arguments feel from the inside: their seductive logic, their emotional pull, and their danger.
 
 Built for gallery and exhibition contexts. Bilingual (English / German). Fully self-contained — no cloud APIs required.
@@ -11,17 +14,17 @@ Built for gallery and exhibition contexts. Bilingual (English / German). Fully s
 ```
 Browser → localhost:3000
              │
-     ┌───────▼────────┐        ┌─────────────────┐
+     ┌───────▼─────────┐        ┌──────────────────┐
      │   Frontend      │        │    Backend       │
      │  React + nginx  │──────▶ │   FastAPI        │
      │  port 3000      │  /api  │   port 8000      │
      └─────────────────┘        └────────┬─────────┘
                                           │
-                                 ┌────────▼─────────┐
+                                 ┌────────▼──────────┐
                                  │     Ollama        │
                                  │  dolphin-mistral  │
                                  │  port 11434       │
-                                 └──────────────────┘
+                                 └───────────────────┘
 ```
 
 Three Docker containers communicating over an internal bridge network. The frontend's nginx serves the React build and reverse-proxies all `/api/*` requests to the backend — the browser never speaks to the backend directly.
